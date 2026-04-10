@@ -296,7 +296,7 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("brew_email2_test_{}", id));
+        let dir = std::env::temp_dir().join(format!("kingi_email2_test_{}", id));
         std::fs::create_dir_all(dir.join("new")).unwrap();
         dir
     }
