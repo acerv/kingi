@@ -51,7 +51,7 @@ pub struct App {
     pub(super) sidebar_state: ListState,
     pub(super) maildirs: Vec<Maildir>,
     pub(super) threads: Vec<ThreadsView>,
-    /// Open tabs. Tab 0 is always the "Brew" main view; tabs start at index 1.
+    /// Open tabs. Tab 0 is always the "Kingi" main view; tabs start at index 1.
     pub(super) tabs: Vec<Tab>,
     pub(super) current_tab: usize,
     pub(super) current_mb: usize,
@@ -710,7 +710,7 @@ impl App {
 
     fn close_current_tab(&mut self) {
         if self.current_tab == 0 {
-            return; // Brew tab cannot be closed
+            return; // Kingi tab cannot be closed
         }
         self.tabs.remove(self.current_tab.saturating_sub(1));
         if self.current_tab >= self.tab_count() {
@@ -1186,7 +1186,7 @@ mod tests {
 
         // Set up a thread with the same message_id as the stub
         app.threads[0] = ThreadsView::new(make_threads(&["stub@test"]));
-        app.current_tab = 0; // back to Brew
+        app.current_tab = 0; // back to Kingi
 
         app.handle_key(key(KeyCode::Enter));
 
@@ -1199,7 +1199,7 @@ mod tests {
     // ── tab view ─────────────────────────────────────────────────────────────
 
     #[test]
-    fn brew_tab_cannot_be_closed() {
+    fn kingi_tab_cannot_be_closed() {
         let mut app = make_app(vec![mb("Inbox", "/inbox")]);
         assert_eq!(app.current_tab, 0);
         app.close_current_tab();
@@ -1208,7 +1208,7 @@ mod tests {
     }
 
     #[test]
-    fn close_only_tab_returns_to_brew() {
+    fn close_only_tab_returns_to_kingi() {
         let mut app = make_app(vec![mb("Inbox", "/inbox")]);
         push_tab(&mut app, "A");
         app.handle_key(key(KeyCode::Char('q')));
@@ -1250,15 +1250,15 @@ mod tests {
     fn ctrl_n_cycles_tabs_from_any_view() {
         let mut app = make_app(vec![mb("Inbox", "/inbox")]);
         push_tab(&mut app, "A");
-        app.current_tab = 0; // on Brew
+        app.current_tab = 0; // on Kingi
         app.handle_key(ctrl(KeyCode::Char('n')));
         assert_eq!(app.current_tab, 1); // moved to email tab
         app.handle_key(ctrl(KeyCode::Char('n')));
-        assert_eq!(app.current_tab, 0); // wrapped back to Brew
+        assert_eq!(app.current_tab, 0); // wrapped back to Kingi
     }
 
     #[test]
-    fn ctrl_n_from_brew_moves_to_first_email_tab() {
+    fn ctrl_n_from_kingi_moves_to_first_email_tab() {
         let mut app = make_app(vec![mb("Inbox", "/inbox")]);
         push_tab(&mut app, "A");
         app.current_tab = 0;
@@ -1267,7 +1267,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_n_wraps_from_last_tab_to_brew() {
+    fn ctrl_n_wraps_from_last_tab_to_kingi() {
         let mut app = make_app(vec![mb("Inbox", "/inbox")]);
         push_tab(&mut app, "A");
         push_tab(&mut app, "B");
@@ -1277,7 +1277,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_p_from_brew_wraps_to_last_email_tab() {
+    fn ctrl_p_from_kingi_wraps_to_last_email_tab() {
         let mut app = make_app(vec![mb("Inbox", "/inbox")]);
         push_tab(&mut app, "A");
         push_tab(&mut app, "B");
@@ -1299,7 +1299,7 @@ mod tests {
     // ── draw ─────────────────────────────────────────────────────────────────
 
     #[test]
-    fn draw_brew_tab_always_present() {
+    fn draw_kingi_tab_always_present() {
         use ratatui::{Terminal, backend::TestBackend};
         let mut app = make_app(vec![mb("Inbox", "/inbox")]);
         let backend = TestBackend::new(80, 24);
@@ -1309,7 +1309,7 @@ mod tests {
         let first_row: String = (0..buf.area().width)
             .map(|x| buf.cell((x, 0)).map_or(" ", |c| c.symbol()))
             .collect();
-        assert!(first_row.contains("Brew"), "got: {first_row}");
+        assert!(first_row.contains("Kingi"), "got: {first_row}");
     }
 
     #[test]

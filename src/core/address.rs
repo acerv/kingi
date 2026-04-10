@@ -348,7 +348,7 @@ mod tests {
 
     fn temp_book(content: &str) -> AddressBook {
         let dir = std::env::temp_dir().join(format!(
-            "brew_ab_test_{}_{}",
+            "kingi_ab_test_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

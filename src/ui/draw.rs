@@ -49,7 +49,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         ])
         .split(area);
 
-    let titles: Vec<String> = std::iter::once("Brew".to_string())
+    let titles: Vec<String> = std::iter::once("Kingi".to_string())
         .chain(app.tabs.iter().map(|tab| match tab {
             Tab::Email(ev) => utils::truncate_string(ev.subject(), 20),
             Tab::Compose(ed, _) => {
