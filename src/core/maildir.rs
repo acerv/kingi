@@ -131,7 +131,7 @@ impl Maildir {
         let email = match Email::from_file(&path.to_path_buf()) {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("brew: failed to load {}: {}", path.display(), e);
+                eprintln!("kingi: failed to load {}: {}", path.display(), e);
                 return false;
             }
         };
@@ -392,7 +392,7 @@ mod tests {
     fn make_maildir() -> PathBuf {
         let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
         let dir =
-            std::env::temp_dir().join(format!("brew-maildir-test-{}-{}", std::process::id(), id));
+            std::env::temp_dir().join(format!("kingi-maildir-test-{}-{}", std::process::id(), id));
         std::fs::create_dir_all(dir.join("new")).unwrap();
         std::fs::create_dir_all(dir.join("cur")).unwrap();
         dir

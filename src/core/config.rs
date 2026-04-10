@@ -42,8 +42,8 @@ pub struct Config {
 impl Config {
     /// Load and parse the config file.
     ///
-    /// Looks for the file at `$XDG_CONFIG_HOME/brew/config.toml`,
-    /// falling back to `~/.config/brew/config.toml`.
+    /// Looks for the file at `$XDG_CONFIG_HOME/kingi/config.toml`,
+    /// falling back to `~/.config/kingi/config.toml`.
     pub fn load() -> Result<Self> {
         let path = config_dir().join("config.toml");
         let text = std::fs::read_to_string(&path)
@@ -53,18 +53,18 @@ impl Config {
     }
 }
 
-/// Read `signature` from the brew config directory if it exists.
+/// Read `signature` from the kingi config directory if it exists.
 pub fn load_signature() -> Option<String> {
     std::fs::read_to_string(config_dir().join("signature")).ok()
 }
 
-/// The brew configuration directory (`$XDG_CONFIG_HOME/brew` or
-/// `~/.config/brew`).
+/// The kingi configuration directory (`$XDG_CONFIG_HOME/kingi` or
+/// `~/.config/kingi`).
 pub fn config_dir() -> PathBuf {
     let base = std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| home_dir().join(".config"));
-    base.join("brew")
+    base.join("kingi")
 }
 
 fn home_dir() -> PathBuf {
@@ -86,7 +86,7 @@ mod tests {
     fn temp_dir() -> PathBuf {
         let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
-        let dir = std::env::temp_dir().join(format!("brew_config_test_{}_{}", pid, id));
+        let dir = std::env::temp_dir().join(format!("kingi_config_test_{}_{}", pid, id));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -114,7 +114,7 @@ password = "secret"
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
         with_xdg(&dir, || {
-            assert_eq!(config_dir(), dir.join("brew"));
+            assert_eq!(config_dir(), dir.join("kingi"));
         });
     }
 
@@ -129,7 +129,7 @@ password = "secret"
         if let Some(h) = old_home {
             unsafe { std::env::set_var("HOME", h) };
         }
-        assert_eq!(result, dir.join(".config").join("brew"));
+        assert_eq!(result, dir.join(".config").join("kingi"));
     }
 
     #[test]
@@ -145,9 +145,9 @@ password = "secret"
     fn load_signature_returns_content() {
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
-        let brew_dir = dir.join("brew");
-        fs::create_dir_all(&brew_dir).unwrap();
-        fs::write(brew_dir.join("signature"), "-- \nBest regards").unwrap();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
+        fs::write(kingi_dir.join("signature"), "-- \nBest regards").unwrap();
         with_xdg(&dir, || {
             assert_eq!(load_signature(), Some("-- \nBest regards".to_string()));
         });
@@ -157,9 +157,9 @@ password = "secret"
     fn config_load_success() {
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
-        let brew_dir = dir.join("brew");
-        fs::create_dir_all(&brew_dir).unwrap();
-        fs::write(brew_dir.join("config.toml"), VALID_TOML).unwrap();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
+        fs::write(kingi_dir.join("config.toml"), VALID_TOML).unwrap();
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
             assert_eq!(config.mailboxes.len(), 1);
@@ -178,10 +178,10 @@ password = "secret"
     fn config_load_with_sync() {
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
-        let brew_dir = dir.join("brew");
-        fs::create_dir_all(&brew_dir).unwrap();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
         let toml = format!("{VALID_TOML}\n[sync]\ncommand = \"mbsync -a\"\ninterval = 300\n");
-        fs::write(brew_dir.join("config.toml"), toml).unwrap();
+        fs::write(kingi_dir.join("config.toml"), toml).unwrap();
         with_xdg(&dir, || {
             let sync = Config::load().unwrap().sync.unwrap();
             assert_eq!(sync.command, "mbsync -a");
@@ -193,8 +193,8 @@ password = "secret"
     fn config_load_multiple_mailboxes() {
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
-        let brew_dir = dir.join("brew");
-        fs::create_dir_all(&brew_dir).unwrap();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
         let toml = r#"
 [[mailbox]]
 label = "Inbox"
@@ -210,7 +210,7 @@ port = 465
 username = "user"
 password = "pass"
 "#;
-        fs::write(brew_dir.join("config.toml"), toml).unwrap();
+        fs::write(kingi_dir.join("config.toml"), toml).unwrap();
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
             assert_eq!(config.mailboxes.len(), 2);
@@ -223,8 +223,8 @@ password = "pass"
     fn config_load_smtp_optional_name() {
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
-        let brew_dir = dir.join("brew");
-        fs::create_dir_all(&brew_dir).unwrap();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
         let toml = r#"
 [[mailbox]]
 label = "Inbox"
@@ -237,7 +237,7 @@ username = "user"
 name = "Alice"
 password = "pass"
 "#;
-        fs::write(brew_dir.join("config.toml"), toml).unwrap();
+        fs::write(kingi_dir.join("config.toml"), toml).unwrap();
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
             assert_eq!(config.smtp.name, Some("Alice".to_string()));
@@ -288,9 +288,9 @@ password = "pass"
     fn config_load_invalid_toml_returns_error() {
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
-        let brew_dir = dir.join("brew");
-        fs::create_dir_all(&brew_dir).unwrap();
-        fs::write(brew_dir.join("config.toml"), "not valid toml {{{").unwrap();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
+        fs::write(kingi_dir.join("config.toml"), "not valid toml {{{").unwrap();
         with_xdg(&dir, || {
             let err = Config::load().unwrap_err();
             assert!(err.to_string().contains("cannot parse config file"));

@@ -296,24 +296,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "brew"
-version = "2.3.2"
-dependencies = [
- "anyhow",
- "arboard",
- "crossterm",
- "edtui",
- "lettre",
- "mail-parser",
- "notify",
- "notify-rust",
- "ratatui",
- "serde",
- "time",
- "toml",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1301,6 +1283,24 @@ dependencies = [
  "hashbrown 0.16.1",
  "portable-atomic",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kingi"
+version = "2.3.3"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "crossterm",
+ "edtui",
+ "lettre",
+ "mail-parser",
+ "notify",
+ "notify-rust",
+ "ratatui",
+ "serde",
+ "time",
+ "toml",
 ]
 
 [[package]]

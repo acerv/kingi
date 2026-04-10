@@ -1,8 +1,8 @@
 <p align="left">
-  <img src="brew.svg" alt="brew" width="320"/>
+  <img src="kingi.svg" alt="kingi" width="320"/>
 </p>
 
-[![Rust](https://github.com/acerv/brew/actions/workflows/rust.yml/badge.svg)](https://github.com/acerv/brew/actions)
+[![Rust](https://github.com/acerv/kingi/actions/workflows/rust.yml/badge.svg)](https://github.com/acerv/kingi/actions)
 
 A terminal email client for Maildir folders, written in Rust.
 
@@ -24,7 +24,7 @@ A terminal email client for Maildir folders, written in Rust.
 
 ## Configuration
 
-Create `~/.config/brew/config.toml`:
+Create `~/.config/kingi/config.toml`:
 
 ```toml
 [smtp]
@@ -56,7 +56,7 @@ command  = "mbsync -a"
 interval = 60
 ```
 
-Optional files (plain text, loaded from `~/.config/brew/`):
+Optional files (plain text, loaded from `~/.config/kingi/`):
 
 | File        | Purpose                 |
 | ----------- | ----------------------- |

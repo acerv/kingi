@@ -8,10 +8,10 @@
   <path d="M 20 45 C 18 68 28 90 42 98 Q 56 105 70 98 C 84 90 94 68 92 45 Z"
         stroke="#888" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 
-  <!-- "brew" text -->
+  <!-- "kingi" text -->
   <text x="115" y="90"
         font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
         font-size="72"
         font-weight="300"
-        fill="#4a8fa8">brew</text>
+        fill="#4a8fa8">kingi</text>
 </svg>

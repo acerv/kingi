@@ -161,7 +161,7 @@ impl App {
                                     "mail-unread-symbolic",
                                 ]);
                                 let _ = notify_rust::Notification::new()
-                                    .summary("brew")
+                                    .summary("kingi")
                                     .body(&body)
                                     .icon(&icon)
                                     .show();

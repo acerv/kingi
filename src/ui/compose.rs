@@ -351,7 +351,7 @@ mod tests {
 
     fn write_tmp_email(content: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "brew-compose-test-{}-{}.eml",
+            "kingi-compose-test-{}-{}.eml",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
