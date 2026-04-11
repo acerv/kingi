@@ -380,6 +380,24 @@ fn sort_threads(threads: &mut [Rc<EmailThread>], order: SortOrder) {
     }
 }
 
+/// Clean up sync-tool metadata from a Maildir filename before moving it
+/// to a different mailbox.
+///
+/// mbsync embeds a `,U=NNNN` UID tag in each filename. UIDs are
+/// mailbox-specific, so carrying them across mailboxes causes
+/// "duplicate UID" errors on the next sync. This function strips that tag.
+pub fn sanitize_filename(name: &str) -> String {
+    if let Some(start) = name.find(",U=") {
+        let end = name[start + 3..]
+            .find(|c: char| !c.is_ascii_digit())
+            .map(|i| start + 3 + i)
+            .unwrap_or(name.len());
+        format!("{}{}", &name[..start], &name[end..])
+    } else {
+        name.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1130,5 +1148,39 @@ mod tests {
             "newer@test"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── sanitize_filename ─────────────────────────────────────────────────
+
+    #[test]
+    fn sanitize_strips_uid_tag() {
+        assert_eq!(
+            sanitize_filename("1765023368.21745_1079.localhost,U=1079:2,S"),
+            "1765023368.21745_1079.localhost:2,S"
+        );
+    }
+
+    #[test]
+    fn sanitize_no_uid_unchanged() {
+        assert_eq!(
+            sanitize_filename("1765023368.21745.localhost:2,S"),
+            "1765023368.21745.localhost:2,S"
+        );
+    }
+
+    #[test]
+    fn sanitize_uid_at_end() {
+        assert_eq!(
+            sanitize_filename("msg.localhost,U=42"),
+            "msg.localhost"
+        );
+    }
+
+    #[test]
+    fn sanitize_no_flags_section() {
+        assert_eq!(
+            sanitize_filename("msg.localhost,U=100:2,"),
+            "msg.localhost:2,"
+        );
     }
 }

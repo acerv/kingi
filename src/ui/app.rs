@@ -904,14 +904,16 @@ impl App {
 
         let target_dir = self.maildirs[target_idx].path().to_string();
         let target_cur = std::path::Path::new(&target_dir).join("cur");
-        let Some(filename) = path.file_name() else {
+        let Some(filename) = path.file_name().and_then(|n| n.to_str()) else {
             return;
         };
-        let dest = target_cur.join(filename);
+        let dest = target_cur.join(crate::core::maildir::sanitize_filename(filename));
 
-        if let Err(e) =
-            std::fs::create_dir_all(&target_cur).and_then(|_| std::fs::rename(&path, &dest))
-        {
+        if let Err(e) = std::fs::create_dir_all(&target_cur).and_then(|_| {
+            std::fs::rename(&path, &dest).or_else(|_| {
+                std::fs::copy(&path, &dest).and_then(|_| std::fs::remove_file(&path))
+            })
+        }) {
             self.status_error = Some(e.to_string());
             return;
         }
