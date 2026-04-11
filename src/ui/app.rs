@@ -868,7 +868,7 @@ impl App {
         let dest = target_cur.join(filename);
 
         if let Err(e) = std::fs::create_dir_all(&target_cur)
-            .and_then(|_| std::fs::copy(&path, &dest).map(|_| ()))
+            .and_then(|_| std::fs::rename(&path, &dest))
         {
             self.status_error = Some(e.to_string());
             return;
@@ -1497,5 +1497,115 @@ mod tests {
         app.handle_key(key(KeyCode::Esc));
         assert!(matches!(app.search, SearchMode::Off));
         assert!(app.threads[0].search().is_none());
+    }
+
+    // ── move ─────────────────────────────────────────────────────────────────
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static MOVE_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn make_maildir_dir() -> std::path::PathBuf {
+        let id = MOVE_TEST_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "kingi-app-move-test-{}-{}",
+            std::process::id(),
+            id
+        ));
+        std::fs::create_dir_all(dir.join("new")).unwrap();
+        std::fs::create_dir_all(dir.join("cur")).unwrap();
+        dir
+    }
+
+    fn make_app_with_dirs(dirs: &[&std::path::Path]) -> App {
+        let mailboxes: Vec<config::Mailbox> = dirs
+            .iter()
+            .enumerate()
+            .map(|(i, d)| config::Mailbox {
+                label: format!("MB{i}"),
+                path: d.to_str().unwrap().to_string(),
+            })
+            .collect();
+        let cfg = make_config(mailboxes);
+        let maildirs: Vec<Maildir> = cfg
+            .mailboxes
+            .iter()
+            .map(|m| Maildir::new(&m.path).unwrap())
+            .collect();
+        let threads: Vec<ThreadsView> =
+            maildirs.iter().map(|m| ThreadsView::new(m.threads())).collect();
+        let mut sidebar_state = ListState::default();
+        if !cfg.mailboxes.is_empty() {
+            sidebar_state.select(Some(0));
+        }
+        App {
+            sidebar_state,
+            config: cfg,
+            maildirs,
+            threads,
+            tabs: Vec::new(),
+            current_tab: 0,
+            current_mb: 0,
+            pending_sync: None,
+            search: SearchMode::Off,
+            move_mode: MoveMode::Off,
+            status_error: None,
+            terminal: None,
+            address_book: AddressBook::load(),
+            clipboard: Clipboard::new().ok(),
+        }
+    }
+
+    fn write_test_email(dir: &std::path::Path, filename: &str) -> std::path::PathBuf {
+        let path = dir.join("cur").join(filename);
+        let content = format!(
+            "Message-ID: <{filename}>\r\n\
+             From: Test <test@example.com>\r\n\
+             Subject: Test\r\n\
+             Date: Mon, 01 Jan 2024 00:00:00 +0000\r\n\
+             \r\n\
+             Body\r\n"
+        );
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn move_email_removes_source_file() {
+        let src = make_maildir_dir();
+        let dst = make_maildir_dir();
+        let src_path = write_test_email(&src, "msg1:2,S");
+
+        let mut app = make_app_with_dirs(&[&src, &dst]);
+        assert!(src_path.exists());
+        app.move_selected_email(1);
+
+        assert!(!src_path.exists(), "source file must be removed after move");
+        assert!(
+            dst.join("cur").join("msg1:2,S").exists(),
+            "file must appear in destination cur/"
+        );
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn move_email_updates_in_memory_state() {
+        let src = make_maildir_dir();
+        let dst = make_maildir_dir();
+        write_test_email(&src, "msg1:2,S");
+
+        let mut app = make_app_with_dirs(&[&src, &dst]);
+        assert_eq!(app.maildirs[0].email_count(), 1);
+        assert_eq!(app.maildirs[1].email_count(), 0);
+
+        app.move_selected_email(1);
+
+        assert_eq!(app.maildirs[0].email_count(), 0);
+        assert_eq!(app.maildirs[1].email_count(), 1);
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
     }
 }
