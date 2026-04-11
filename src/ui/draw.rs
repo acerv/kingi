@@ -195,21 +195,16 @@ fn draw_statusbar(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: 
 }
 
 fn draw_move_popup(frame: &mut ratatui::Frame, app: &App) {
-    let MoveMode::Active { selected } = app.move_mode else {
+    let MoveMode::Active {
+        selected,
+        ref labels,
+    } = app.move_mode
+    else {
         return;
     };
 
-    let labels: Vec<String> = app
-        .config
-        .mailboxes
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| *i != app.current_mb)
-        .map(|(_, mb)| mb.label.clone())
-        .collect();
-
     if !labels.is_empty() {
-        draw_list_popup(frame, " Move to ", &labels, selected);
+        draw_list_popup(frame, " Move to ", labels, selected);
     }
 }
 

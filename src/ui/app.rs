@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Andrea Cervesato <andrea.cervesato@suse.com>
 use crate::core::address::{Address, AddressBook};
-use crate::core::config::Config;
+use crate::core::config::{Config, Mailbox};
 use crate::core::maildir::Maildir;
 use crate::core::thread::{Email, Flag};
 use crate::ui::compose::{self, EmailCompose};
@@ -31,7 +31,10 @@ pub(super) enum SearchMode {
 
 pub(super) enum MoveMode {
     Off,
-    Active { selected: usize },
+    Active {
+        selected: usize,
+        labels: Vec<String>,
+    },
 }
 
 /// The origin of a compose tab, used to set the correct flag when sent.
@@ -333,9 +336,8 @@ impl App {
                     .get(self.current_mb)
                     .and_then(|tv| tv.selected())
                     .is_some()
-                    && self.config.mailboxes.len() > 1
                 {
-                    self.move_mode = MoveMode::Active { selected: 0 };
+                    self.activate_move_mode();
                 }
             }
             (_, KeyCode::Char('C')) => self.compose(),
@@ -503,11 +505,7 @@ impl App {
                     ev.last_line();
                 }
             }
-            (_, KeyCode::Char('m')) => {
-                if self.config.mailboxes.len() > 1 {
-                    self.move_mode = MoveMode::Active { selected: 0 };
-                }
-            }
+            (_, KeyCode::Char('m')) => self.activate_move_mode(),
             (_, KeyCode::Char('D')) => self.delete_current_tab_email(),
             (_, KeyCode::Char('r')) => self.open_reply_from_tab(false),
             (_, KeyCode::Char('R')) => self.open_reply_from_tab(true),
@@ -602,11 +600,11 @@ impl App {
 
     fn delete_selected_thread(&mut self) {
         let trash_idx = self.trash_idx();
-        if let Some(idx) = trash_idx {
-            if idx != self.current_mb {
-                self.move_selected_email(idx);
-                return;
-            }
+        if let Some(idx) = trash_idx
+            && idx != self.current_mb
+        {
+            self.move_selected_email(idx);
+            return;
         }
 
         let Some(thread) = self
@@ -635,12 +633,11 @@ impl App {
                 .maildirs
                 .iter()
                 .position(|md| md.find_by_id(&id).is_some())
+                && src_idx != trash_idx
             {
-                if src_idx != trash_idx {
-                    self.move_email_by_id(&id, src_idx, trash_idx);
-                    self.close_current_tab();
-                    return;
-                }
+                self.move_email_by_id(&id, src_idx, trash_idx);
+                self.close_current_tab();
+                return;
             }
         }
 
@@ -841,14 +838,41 @@ impl App {
         self.current_mb = self.current_mb.saturating_sub(1);
     }
 
+    fn move_targets(&self) -> impl Iterator<Item = (usize, &Mailbox)> {
+        let current = self.current_mb;
+        self.config
+            .mailboxes
+            .iter()
+            .enumerate()
+            .filter(move |(i, mb)| *i != current && !mb.is_drafts())
+    }
+
+    fn activate_move_mode(&mut self) {
+        let targets: Vec<(usize, String)> = self
+            .move_targets()
+            .map(|(i, mb)| (i, mb.label.clone()))
+            .collect();
+        if !targets.is_empty() {
+            let labels = targets.iter().map(|(_, l)| l.clone()).collect();
+            self.move_mode = MoveMode::Active {
+                selected: 0,
+                labels,
+            };
+        }
+    }
+
     fn handle_move_key(&mut self, key: KeyEvent) {
-        let targets_count = self.config.mailboxes.len().saturating_sub(1);
-        let MoveMode::Active { ref mut selected } = self.move_mode else {
+        let MoveMode::Active {
+            ref mut selected,
+            ref labels,
+        } = self.move_mode
+        else {
             return;
         };
+        let count = labels.len();
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                *selected = (*selected + 1).min(targets_count.saturating_sub(1));
+                *selected = (*selected + 1).min(count.saturating_sub(1));
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 *selected = selected.saturating_sub(1);
@@ -856,14 +880,7 @@ impl App {
             KeyCode::Enter => {
                 let sel = *selected;
                 self.move_mode = MoveMode::Off;
-                let target_idx = self
-                    .config
-                    .mailboxes
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i != self.current_mb)
-                    .nth(sel)
-                    .map(|(i, _)| i);
+                let target_idx = self.move_targets().nth(sel).map(|(i, _)| i);
                 if let Some(idx) = target_idx {
                     self.move_selected_email(idx);
                 }
@@ -899,7 +916,8 @@ impl App {
             return;
         }
 
-        self.maildirs[src_idx].remove_by_id(message_id);
+        self.maildirs[src_idx].remove(&path);
+        self.maildirs[src_idx].invalidate();
         self.threads[src_idx].invalidate();
 
         let _ = self.maildirs[target_idx].sync();

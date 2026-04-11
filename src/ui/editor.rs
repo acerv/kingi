@@ -276,10 +276,10 @@ impl Editor {
         }
         // stop at first blank line (paragraph boundary)
         self.body_state.cursor = Index2::new(row.min(total.saturating_sub(1)), 0);
-        if self.body_state.mode == EditorMode::Visual {
-            if let Some(sel) = &mut self.body_state.selection {
-                sel.end = self.body_state.cursor;
-            }
+        if self.body_state.mode == EditorMode::Visual
+            && let Some(sel) = &mut self.body_state.selection
+        {
+            sel.end = self.body_state.cursor;
         }
     }
 
@@ -305,10 +305,10 @@ impl Editor {
         }
         // stop at first blank line (paragraph boundary), or line 0
         self.body_state.cursor = Index2::new(r, 0);
-        if self.body_state.mode == EditorMode::Visual {
-            if let Some(sel) = &mut self.body_state.selection {
-                sel.end = self.body_state.cursor;
-            }
+        if self.body_state.mode == EditorMode::Visual
+            && let Some(sel) = &mut self.body_state.selection
+        {
+            sel.end = self.body_state.cursor;
         }
     }
 

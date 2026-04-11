@@ -52,8 +52,31 @@ impl Config {
         let path = config_dir().join("config.toml");
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read config file: {}", path.display()))?;
-        toml::from_str(&text)
-            .with_context(|| format!("cannot parse config file: {}", path.display()))
+        let mut config: Config = toml::from_str(&text)
+            .with_context(|| format!("cannot parse config file: {}", path.display()))?;
+        config.ensure_defaults();
+        Ok(config)
+    }
+
+    /// Ensure that Drafts and Trash mailboxes are always present.
+    /// If not explicitly configured, they default to subdirectories
+    /// of the kingi config directory.
+    fn ensure_defaults(&mut self) {
+        let cfg_dir = config_dir();
+
+        if !self.mailboxes.iter().any(|mb| mb.is_drafts()) {
+            self.mailboxes.push(Mailbox {
+                label: "Drafts".to_string(),
+                path: cfg_dir.join("drafts").to_string_lossy().into_owned(),
+            });
+        }
+
+        if !self.mailboxes.iter().any(|mb| mb.is_trash()) {
+            self.mailboxes.push(Mailbox {
+                label: "Trash".to_string(),
+                path: cfg_dir.join("trash").to_string_lossy().into_owned(),
+            });
+        }
     }
 }
 
@@ -166,7 +189,6 @@ password = "secret"
         fs::write(kingi_dir.join("config.toml"), VALID_TOML).unwrap();
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
-            assert_eq!(config.mailboxes.len(), 1);
             assert_eq!(config.mailboxes[0].label, "Inbox");
             assert_eq!(config.mailboxes[0].path, "/home/user/mail/inbox");
             assert_eq!(config.smtp.host, "smtp.example.com");
@@ -175,6 +197,9 @@ password = "secret"
             assert_eq!(config.smtp.password, "secret");
             assert!(config.smtp.name.is_none());
             assert!(config.sync.is_none());
+            // Drafts and Trash are always appended when missing
+            assert!(config.mailboxes.iter().any(|mb| mb.is_drafts()));
+            assert!(config.mailboxes.iter().any(|mb| mb.is_trash()));
         });
     }
 
@@ -217,9 +242,11 @@ password = "pass"
         fs::write(kingi_dir.join("config.toml"), toml).unwrap();
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
-            assert_eq!(config.mailboxes.len(), 2);
+            assert_eq!(config.mailboxes[0].label, "Inbox");
             assert_eq!(config.mailboxes[1].label, "Sent");
             assert_eq!(config.mailboxes[1].path, "/mail/sent");
+            assert!(config.mailboxes.iter().any(|mb| mb.is_drafts()));
+            assert!(config.mailboxes.iter().any(|mb| mb.is_trash()));
         });
     }
 
@@ -309,6 +336,60 @@ password = "pass"
     fn is_trash_does_not_match_other_labels() {
         assert!(!mb("Inbox").is_trash());
         assert!(!mb("Drafts").is_trash());
+    }
+
+    // ── ensure_defaults ────────────────────────────────────────────────────
+
+    #[test]
+    fn ensure_defaults_adds_drafts_and_trash() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
+        fs::write(kingi_dir.join("config.toml"), VALID_TOML).unwrap();
+        with_xdg(&dir, || {
+            let config = Config::load().unwrap();
+            let drafts = config.mailboxes.iter().find(|mb| mb.is_drafts()).unwrap();
+            let trash = config.mailboxes.iter().find(|mb| mb.is_trash()).unwrap();
+            assert_eq!(drafts.path, kingi_dir.join("drafts").to_string_lossy());
+            assert_eq!(trash.path, kingi_dir.join("trash").to_string_lossy());
+        });
+    }
+
+    #[test]
+    fn ensure_defaults_does_not_duplicate_configured_drafts() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
+        let toml =
+            format!("{VALID_TOML}\n[[mailbox]]\nlabel = \"Drafts\"\npath = \"/mail/drafts\"\n");
+        fs::write(kingi_dir.join("config.toml"), toml).unwrap();
+        with_xdg(&dir, || {
+            let config = Config::load().unwrap();
+            let count = config.mailboxes.iter().filter(|mb| mb.is_drafts()).count();
+            assert_eq!(count, 1);
+            let drafts = config.mailboxes.iter().find(|mb| mb.is_drafts()).unwrap();
+            assert_eq!(drafts.path, "/mail/drafts");
+        });
+    }
+
+    #[test]
+    fn ensure_defaults_does_not_duplicate_configured_trash() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
+        let toml =
+            format!("{VALID_TOML}\n[[mailbox]]\nlabel = \"Trash\"\npath = \"/mail/trash\"\n");
+        fs::write(kingi_dir.join("config.toml"), toml).unwrap();
+        with_xdg(&dir, || {
+            let config = Config::load().unwrap();
+            let count = config.mailboxes.iter().filter(|mb| mb.is_trash()).count();
+            assert_eq!(count, 1);
+            let trash = config.mailboxes.iter().find(|mb| mb.is_trash()).unwrap();
+            assert_eq!(trash.path, "/mail/trash");
+        });
     }
 
     #[test]
