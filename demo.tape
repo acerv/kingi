@@ -83,7 +83,15 @@ Sleep 4s
 # Search
 Type "/"
 Sleep 2s
-Type "test"
+Type "e"
+Sleep 1.5s
+Type "p"
+Sleep 1.5s
+Type "o"
+Sleep 1.5s
+Type "l"
+Sleep 1.5s
+Type "l"
 Sleep 4s
 Escape
 Sleep 3s
