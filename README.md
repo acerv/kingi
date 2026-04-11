@@ -4,22 +4,25 @@
 
 [![Rust](https://github.com/acerv/kingi/actions/workflows/rust.yml/badge.svg)](https://github.com/acerv/kingi/actions)
 
-A terminal email client for Maildir folders, written in Rust.
+A fast, Vim-inspired terminal email client for Maildir folders, written in Rust.
+
+![demo](demo.gif)
+
+## Installation
+
+```sh
+cargo install --path .
+```
 
 ## Features
 
 - Threaded email list with tree indentation
 - Diff/patch syntax highlighting in email bodies
-- Reply-all composition with quoting in `$VISUAL`/`$EDITOR`
-- Compose new emails from scratch
-- Draft saving to a dedicated Drafts mailbox
-- Trash mailbox support (delete moves to Trash; delete in Trash permanently removes)
-- Read/unread tracking via Maildir filename flags
-- Multiple mailboxes with sidebar
-- Tab-based email viewing
-- Live search filtering by subject
-- Unread-only filter toggle
-- Sort threads by most-recent activity (ascending / descending)
+- Reply, reply-all with quoting, forward, compose in `$VISUAL`/`$EDITOR`
+- Drafts and Trash mailboxes (auto-created if not configured)
+- Read/unread tracking, flagging, live search, unread-only filter
+- Multiple mailboxes with sidebar, tab-based email viewing
+- Move emails or entire threads between mailboxes
 - SMTP sending via STARTTLS
 - Periodic background sync via a configurable shell command (e.g. `mbsync`)
 
@@ -39,99 +42,74 @@ password = "app-password"
 label = "INBOX"
 path  = "/home/you/Mail/INBOX/"
 
-[[mailbox]]
-label = "Work"
-path  = "/home/you/Mail/Work/"
-
-# Optional: a mailbox labelled "Drafts" is treated specially.
-# Pressing Enter on a draft reopens it in the editor.
-# The send dialog offers a "Save as draft" option.
-# If omitted, a Drafts mailbox is created in ~/.config/kingi/drafts/.
+# "Drafts" and "Trash" labels are treated specially.
+# If omitted, defaults are created under ~/.config/kingi/.
 [[mailbox]]
 label = "Drafts"
 path  = "/home/you/Mail/Drafts/"
 
-# Optional: a mailbox labelled "Trash" is treated specially.
-# Deleting an email moves it to Trash; deleting from Trash
-# permanently removes it.
-# If omitted, a Trash mailbox is created in ~/.config/kingi/trash/.
 [[mailbox]]
 label = "Trash"
 path  = "/home/you/Mail/Trash/"
 
 # Optional: run a shell command every N seconds to sync mail.
-# Errors are shown in the status bar; the UI is never blocked.
 [sync]
 command  = "mbsync -a"
 interval = 60
 ```
 
-Optional files (plain text, loaded from `~/.config/kingi/`):
-
-| File        | Purpose                 |
-| ----------- | ----------------------- |
-| `signature` | Appended to every draft |
+A plain-text `~/.config/kingi/signature` file, if present, is appended to every draft.
 
 ## Key bindings
 
 ### Thread list
 
-| Key                   | Action                                                     |
-| --------------------- | ---------------------------------------------------------- |
-| `j` / `k` / `↑` / `↓` | Move down / up                                             |
-| `Ctrl+D` / `PageDown` | Jump 15 emails down                                        |
-| `Ctrl+U` / `PageUp`   | Jump 15 emails up                                          |
-| `g`                   | Jump to first email                                        |
-| `G`                   | Jump to last email                                         |
-| `J` / `K`             | Next / previous mailbox                                    |
-| `Enter`               | Open email in a new tab (Drafts mailbox: reopen in editor) |
-| `r`                   | Reply-all (empty body)                                     |
-| `R`                   | Reply-all (quoted)                                         |
-| `f`                   | Forward email                                              |
-| `C`                   | Compose new email                                          |
-| `v`                   | Toggle read / unread                                       |
-| `Space`               | Toggle flagged (★)                                         |
-| `m`                   | Move email to another mailbox (popup picker)               |
-| `M`                   | Move entire thread to another mailbox                      |
-| `s`                   | Toggle sort order (descending / ascending)                 |
-| `N`                   | Toggle unread-only filter                                  |
-| `/`                   | Search by subject (live)                                   |
-| `Esc`                 | Clear search filter                                        |
-| `Ctrl+S`              | Force sync mailboxes                                       |
-| `D`                   | Delete email                                               |
-| `Q`                   | Quit                                                       |
+| Key               | Action                                   |
+| ----------------- | ---------------------------------------- |
+| `j`/`k`/`↑`/`↓`   | Move selection                           |
+| `Ctrl+D`/`Ctrl+U` | Page down / up                           |
+| `g` / `G`         | First / last email                       |
+| `J` / `K`         | Next / previous mailbox                  |
+| `Enter`           | Open email (in Drafts: reopen in editor) |
+| `r` / `R`         | Reply-all / reply-all quoted             |
+| `f`               | Forward                                  |
+| `C`               | Compose new email                        |
+| `v`               | Toggle read / unread                     |
+| `Space`           | Toggle flagged                           |
+| `m` / `M`         | Move email / move entire thread          |
+| `D`               | Delete email                             |
+| `s`               | Toggle sort order                        |
+| `N`               | Toggle unread-only filter                |
+| `/` / `Esc`       | Search by subject / clear search         |
+| `Ctrl+S`          | Force sync                               |
+| `Q`               | Quit                                     |
 
 ### Email tab
 
-| Key                   | Action                           |
-| --------------------- | -------------------------------- |
-| `j` / `k` / `↑` / `↓` | Scroll down / up one line        |
-| `Ctrl+D` / `PageDown` | Scroll 15 lines down             |
-| `Ctrl+U` / `PageUp`   | Scroll 15 lines up               |
-| `Y`                   | Copy email body in the clipboard |
-| `g`                   | Top of body                      |
-| `G`                   | Bottom of body                   |
-| `J` / `K`             | Next / previous email            |
-| `r`                   | Reply (empty body)               |
-| `R`                   | Reply (quoted)                   |
-| `f`                   | Forward email                    |
-| `m`                   | Move email to another mailbox    |
-| `M`                   | Move entire thread               |
-| `D`                   | Delete email and close tab       |
-| `q`                   | Close tab                        |
+| Key               | Action                   |
+| ----------------- | ------------------------ |
+| `j`/`k`/`↑`/`↓`   | Scroll line              |
+| `Ctrl+D`/`Ctrl+U` | Page down / up           |
+| `g` / `G`         | Top / bottom             |
+| `J` / `K`         | Next / previous email    |
+| `Y`               | Copy body to clipboard   |
+| `r` / `R`         | Reply / reply quoted     |
+| `f`               | Forward                  |
+| `m` / `M`         | Move email / move thread |
+| `D`               | Delete and close tab     |
+| `q`               | Close tab                |
 
-### Compose editor
+### Compose
 
-| Key       | Action                                                |
-| --------- | ----------------------------------------------------- |
-| `Ctrl+Q`  | Show send dialog (works from any field or mode)       |
-| `j` / `k` | Navigate options in send dialog                       |
-| `Enter`   | Confirm selected option (Send / Save draft / Discard) |
-| `Esc`     | Return to editor from send dialog                     |
+| Key      | Action                                |
+| -------- | ------------------------------------- |
+| `Ctrl+Q` | Send dialog                           |
+| `j`/`k`  | Navigate dialog options               |
+| `Enter`  | Confirm (Send / Save draft / Discard) |
+| `Esc`    | Back to editor                        |
 
 ### Global
 
-| Key      | Action              |
-| -------- | ------------------- |
-| `Ctrl+N` | Next tab (circular) |
-| `Ctrl+P` | Prev tab (circular) |
+| Key                 | Action              |
+| ------------------- | ------------------- |
+| `Ctrl+N` / `Ctrl+P` | Next / previous tab |
