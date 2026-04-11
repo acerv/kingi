@@ -93,6 +93,18 @@ impl ThreadsView {
             .map(|r| r.thread.clone())
     }
 
+    /// Return the root thread of the currently highlighted email.
+    /// Walks backwards from the selection to find the `depth == 0` entry.
+    pub fn selected_root(&self) -> Option<Rc<EmailThread>> {
+        let idx = self.state.selected()?;
+        for i in (0..=idx).rev() {
+            if self.rows[i].depth == 0 {
+                return Some(self.rows[i].thread.clone());
+            }
+        }
+        None
+    }
+
     /// Re-flatten from the shared `ThreadList`, preserving the selection by
     /// message-id if still present, otherwise clamping to the new length.
     pub fn invalidate(&mut self) {
@@ -398,6 +410,33 @@ mod tests {
         let view = ThreadsView::new(tlist(vec![parent]));
         assert_eq!(view.rows[0].depth, 0);
         assert_eq!(view.rows[1].depth, 1);
+    }
+
+    // ── selected_root ─────────────────────────────────────────────────────
+
+    #[test]
+    fn selected_root_returns_root_when_on_root() {
+        let child = thread("c", "", "Re", false);
+        let parent = with_reply(thread("p", "", "Root", false), child);
+        let view = ThreadsView::new(tlist(vec![parent]));
+        // selection is on "p" (depth 0)
+        assert_eq!(view.selected_root().unwrap().parent.message_id, "p");
+    }
+
+    #[test]
+    fn selected_root_returns_root_when_on_reply() {
+        let child = thread("c", "", "Re", false);
+        let parent = with_reply(thread("p", "", "Root", false), child);
+        let mut view = ThreadsView::new(tlist(vec![parent]));
+        view.next_email(1); // select "c" (depth 1)
+        assert_eq!(view.selected().unwrap().parent.message_id, "c");
+        assert_eq!(view.selected_root().unwrap().parent.message_id, "p");
+    }
+
+    #[test]
+    fn selected_root_on_empty_returns_none() {
+        let view = ThreadsView::new(tlist(vec![]));
+        assert!(view.selected_root().is_none());
     }
 
     // ── invalidate ───────────────────────────────────────────────────────────

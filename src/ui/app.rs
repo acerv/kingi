@@ -34,6 +34,7 @@ pub(super) enum MoveMode {
     Active {
         selected: usize,
         labels: Vec<String>,
+        thread: bool,
     },
 }
 
@@ -337,7 +338,17 @@ impl App {
                     .and_then(|tv| tv.selected())
                     .is_some()
                 {
-                    self.activate_move_mode();
+                    self.activate_move_mode(false);
+                }
+            }
+            (_, KeyCode::Char('M')) => {
+                if self
+                    .threads
+                    .get(self.current_mb)
+                    .and_then(|tv| tv.selected())
+                    .is_some()
+                {
+                    self.activate_move_mode(true);
                 }
             }
             (_, KeyCode::Char('C')) => self.compose(),
@@ -505,7 +516,8 @@ impl App {
                     ev.last_line();
                 }
             }
-            (_, KeyCode::Char('m')) => self.activate_move_mode(),
+            (_, KeyCode::Char('m')) => self.activate_move_mode(false),
+            (_, KeyCode::Char('M')) => self.activate_move_mode(true),
             (_, KeyCode::Char('D')) => self.delete_current_tab_email(),
             (_, KeyCode::Char('r')) => self.open_reply_from_tab(false),
             (_, KeyCode::Char('R')) => self.open_reply_from_tab(true),
@@ -847,7 +859,7 @@ impl App {
             .filter(move |(i, mb)| *i != current && !mb.is_drafts())
     }
 
-    fn activate_move_mode(&mut self) {
+    fn activate_move_mode(&mut self, thread: bool) {
         let targets: Vec<(usize, String)> = self
             .move_targets()
             .map(|(i, mb)| (i, mb.label.clone()))
@@ -857,6 +869,7 @@ impl App {
             self.move_mode = MoveMode::Active {
                 selected: 0,
                 labels,
+                thread,
             };
         }
     }
@@ -865,6 +878,7 @@ impl App {
         let MoveMode::Active {
             ref mut selected,
             ref labels,
+            thread,
         } = self.move_mode
         else {
             return;
@@ -879,10 +893,15 @@ impl App {
             }
             KeyCode::Enter => {
                 let sel = *selected;
+                let is_thread = thread;
                 self.move_mode = MoveMode::Off;
                 let target_idx = self.move_targets().nth(sel).map(|(i, _)| i);
                 if let Some(idx) = target_idx {
-                    self.move_selected_email(idx);
+                    if is_thread {
+                        self.move_selected_thread(idx);
+                    } else {
+                        self.move_selected_email(idx);
+                    }
                 }
             }
             KeyCode::Esc => {
@@ -897,6 +916,11 @@ impl App {
     }
 
     fn move_email_by_id(&mut self, message_id: &str, src_idx: usize, target_idx: usize) {
+        // Sync first so in-memory paths match disk (mbsync may have
+        // renamed files since we last loaded them).
+        let _ = self.maildirs[src_idx].sync();
+        self.threads[src_idx].invalidate();
+
         let path = match self.maildirs[src_idx].find_by_id(message_id) {
             Some(t) => t.parent.path().clone(),
             None => return,
@@ -910,9 +934,8 @@ impl App {
         let dest = target_cur.join(crate::core::maildir::sanitize_filename(filename));
 
         if let Err(e) = std::fs::create_dir_all(&target_cur).and_then(|_| {
-            std::fs::rename(&path, &dest).or_else(|_| {
-                std::fs::copy(&path, &dest).and_then(|_| std::fs::remove_file(&path))
-            })
+            std::fs::rename(&path, &dest)
+                .or_else(|_| std::fs::copy(&path, &dest).and_then(|_| std::fs::remove_file(&path)))
         }) {
             self.status_error = Some(e.to_string());
             return;
@@ -936,6 +959,67 @@ impl App {
         };
         let message_id = thread.parent.message_id.clone();
         self.move_email_by_id(&message_id, self.current_mb, target_mb_idx);
+    }
+
+    fn move_selected_thread(&mut self, target_mb_idx: usize) {
+        let Some(thread) = self
+            .threads
+            .get(self.current_mb)
+            .and_then(|tv| tv.selected_root())
+        else {
+            return;
+        };
+
+        let root_id = thread.parent.message_id.clone();
+
+        // Sync first so in-memory paths match disk (mbsync may have
+        // renamed files since we last loaded them).
+        let _ = self.maildirs[self.current_mb].sync();
+        self.threads[self.current_mb].invalidate();
+
+        let root_path = match self.maildirs[self.current_mb].find_by_id(&root_id) {
+            Some(t) => t.parent.path().clone(),
+            None => return,
+        };
+        let all_paths = self.maildirs[self.current_mb].thread_paths(&root_id);
+
+        if all_paths.is_empty() {
+            return;
+        }
+
+        let target_dir = self.maildirs[target_mb_idx].path().to_string();
+        let target_cur = std::path::Path::new(&target_dir).join("cur");
+        if let Err(e) = std::fs::create_dir_all(&target_cur) {
+            self.status_error = Some(e.to_string());
+            return;
+        }
+
+        let mut failed = false;
+        for path in &all_paths {
+            let Some(filename) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let dest = target_cur.join(crate::core::maildir::sanitize_filename(filename));
+            if let Err(e) = std::fs::rename(path, &dest)
+                .or_else(|_| std::fs::copy(path, &dest).and_then(|_| std::fs::remove_file(path)))
+            {
+                self.status_error = Some(e.to_string());
+                failed = true;
+                break;
+            }
+        }
+
+        if failed {
+            // Partial move: let sync reconcile disk vs memory.
+            return;
+        }
+
+        self.maildirs[self.current_mb].remove(&root_path);
+        self.maildirs[self.current_mb].invalidate();
+        self.threads[self.current_mb].invalidate();
+
+        let _ = self.maildirs[target_mb_idx].sync();
+        self.threads[target_mb_idx].invalidate();
     }
 }
 
@@ -1730,5 +1814,73 @@ mod tests {
         assert_eq!(app.maildirs[0].email_count(), 0);
 
         let _ = std::fs::remove_dir_all(&inbox);
+    }
+
+    // ── move thread ─────────────────────────────────────────────────────
+
+    fn write_test_reply(
+        dir: &std::path::Path,
+        filename: &str,
+        reply_to: &str,
+    ) -> std::path::PathBuf {
+        let path = dir.join("cur").join(filename);
+        let content = format!(
+            "Message-ID: <{filename}>\r\n\
+             In-Reply-To: <{reply_to}>\r\n\
+             From: Test <test@example.com>\r\n\
+             Subject: Re: Test\r\n\
+             Date: Tue, 02 Jan 2024 00:00:00 +0000\r\n\
+             \r\n\
+             Reply body\r\n"
+        );
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn move_thread_moves_all_files() {
+        let src = make_maildir_dir();
+        let dst = make_maildir_dir();
+        let parent_path = write_test_email(&src, "parent:2,S");
+        let child_path = write_test_reply(&src, "child:2,S", "parent:2,S");
+
+        let mut app = make_app_with_dirs(&[&src, &dst]);
+        assert_eq!(app.maildirs[0].email_count(), 2);
+
+        app.move_selected_thread(1);
+
+        assert!(!parent_path.exists(), "parent must be removed from source");
+        assert!(!child_path.exists(), "child must be removed from source");
+        assert!(
+            dst.join("cur").join("parent:2,S").exists(),
+            "parent must appear in target cur/"
+        );
+        assert!(
+            dst.join("cur").join("child:2,S").exists(),
+            "child must appear in target cur/"
+        );
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn move_thread_updates_in_memory_state() {
+        let src = make_maildir_dir();
+        let dst = make_maildir_dir();
+        write_test_email(&src, "parent:2,S");
+        write_test_reply(&src, "child:2,S", "parent:2,S");
+
+        let mut app = make_app_with_dirs(&[&src, &dst]);
+        assert_eq!(app.maildirs[0].email_count(), 2);
+        assert_eq!(app.maildirs[1].email_count(), 0);
+
+        app.move_selected_thread(1);
+
+        assert_eq!(app.maildirs[0].email_count(), 0);
+        assert_eq!(app.maildirs[1].email_count(), 2);
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
     }
 }

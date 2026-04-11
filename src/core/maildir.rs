@@ -199,6 +199,17 @@ impl Maildir {
         self.lookup.get(message_id)
     }
 
+    /// Return the on-disk paths of every email in the thread rooted at
+    /// `message_id`, including all descendants. Returns an empty vec if
+    /// the message is not found.
+    pub fn thread_paths(&self, message_id: &str) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        if let Some(thread) = self.lookup.get(message_id) {
+            collect_paths(thread, &mut paths);
+        }
+        paths
+    }
+
     /// Total number of emails tracked in this mailbox.
     pub fn email_count(&self) -> usize {
         self.lookup.len()
@@ -345,6 +356,14 @@ fn collect_ids(thread: &Rc<EmailThread>, out: &mut Vec<String>) {
     out.push(thread.parent.message_id.clone());
     for reply in thread.replies.borrow().iter() {
         collect_ids(reply, out);
+    }
+}
+
+/// Collect the on-disk path of `thread` and all its descendants.
+fn collect_paths(thread: &Rc<EmailThread>, out: &mut Vec<PathBuf>) {
+    out.push(thread.parent.path().clone());
+    for reply in thread.replies.borrow().iter() {
+        collect_paths(reply, out);
     }
 }
 
@@ -1170,10 +1189,7 @@ mod tests {
 
     #[test]
     fn sanitize_uid_at_end() {
-        assert_eq!(
-            sanitize_filename("msg.localhost,U=42"),
-            "msg.localhost"
-        );
+        assert_eq!(sanitize_filename("msg.localhost,U=42"), "msg.localhost");
     }
 
     #[test]
@@ -1182,5 +1198,57 @@ mod tests {
             sanitize_filename("msg.localhost,U=100:2,"),
             "msg.localhost:2,"
         );
+    }
+
+    // ── thread_paths ──────────────────────────────────────────────────────
+
+    #[test]
+    fn thread_paths_returns_root_only_for_single_email() {
+        let dir = make_maildir();
+        let path = write_msg(
+            &dir,
+            "new",
+            "msg1",
+            &email_content("id1@test", None, "Mon, 01 Jan 2024 00:00:00 +0000"),
+        );
+        let maildir = Maildir::new(dir.to_str().unwrap()).unwrap();
+        let paths = maildir.thread_paths("id1@test");
+        assert_eq!(paths, vec![path]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thread_paths_returns_all_descendants() {
+        let dir = make_maildir();
+        let parent_path = write_msg(
+            &dir,
+            "new",
+            "parent",
+            &email_content("parent@test", None, "Mon, 01 Jan 2024 00:00:00 +0000"),
+        );
+        let child_path = write_msg(
+            &dir,
+            "new",
+            "child",
+            &email_content(
+                "child@test",
+                Some("parent@test"),
+                "Tue, 02 Jan 2024 00:00:00 +0000",
+            ),
+        );
+        let maildir = Maildir::new(dir.to_str().unwrap()).unwrap();
+        let paths = maildir.thread_paths("parent@test");
+        assert_eq!(paths.len(), 2);
+        assert!(paths.contains(&parent_path));
+        assert!(paths.contains(&child_path));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thread_paths_returns_empty_for_unknown_id() {
+        let dir = make_maildir();
+        let maildir = Maildir::new(dir.to_str().unwrap()).unwrap();
+        assert!(maildir.thread_paths("ghost@test").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

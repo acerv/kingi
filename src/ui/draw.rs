@@ -198,13 +198,19 @@ fn draw_move_popup(frame: &mut ratatui::Frame, app: &App) {
     let MoveMode::Active {
         selected,
         ref labels,
+        thread,
     } = app.move_mode
     else {
         return;
     };
 
     if !labels.is_empty() {
-        draw_list_popup(frame, " Move to ", labels, selected);
+        let title = if thread {
+            " Move thread to "
+        } else {
+            " Move to "
+        };
+        draw_list_popup(frame, title, labels, selected);
     }
 }
 
