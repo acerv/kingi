@@ -601,6 +601,14 @@ impl App {
     }
 
     fn delete_selected_thread(&mut self) {
+        let trash_idx = self.trash_idx();
+        if let Some(idx) = trash_idx {
+            if idx != self.current_mb {
+                self.move_selected_email(idx);
+                return;
+            }
+        }
+
         let Some(thread) = self
             .threads
             .get(self.current_mb)
@@ -619,6 +627,24 @@ impl App {
             return;
         };
         let id = ev.message_id().to_string();
+        let trash_idx = self.trash_idx();
+
+        if let Some(trash_idx) = trash_idx {
+            // Find which mailbox owns this email and move it to trash.
+            if let Some(src_idx) = self
+                .maildirs
+                .iter()
+                .position(|md| md.find_by_id(&id).is_some())
+            {
+                if src_idx != trash_idx {
+                    self.move_email_by_id(&id, src_idx, trash_idx);
+                    self.close_current_tab();
+                    return;
+                }
+            }
+        }
+
+        // No trash folder, already in trash, or not found — permanently delete.
         for (maildir, tv) in self.maildirs.iter_mut().zip(self.threads.iter_mut()) {
             maildir.remove_by_id(&id);
             tv.invalidate();
@@ -849,6 +875,37 @@ impl App {
         }
     }
 
+    fn trash_idx(&self) -> Option<usize> {
+        self.config.mailboxes.iter().position(|mb| mb.is_trash())
+    }
+
+    fn move_email_by_id(&mut self, message_id: &str, src_idx: usize, target_idx: usize) {
+        let path = match self.maildirs[src_idx].find_by_id(message_id) {
+            Some(t) => t.parent.path().clone(),
+            None => return,
+        };
+
+        let target_dir = self.maildirs[target_idx].path().to_string();
+        let target_cur = std::path::Path::new(&target_dir).join("cur");
+        let Some(filename) = path.file_name() else {
+            return;
+        };
+        let dest = target_cur.join(filename);
+
+        if let Err(e) =
+            std::fs::create_dir_all(&target_cur).and_then(|_| std::fs::rename(&path, &dest))
+        {
+            self.status_error = Some(e.to_string());
+            return;
+        }
+
+        self.maildirs[src_idx].remove_by_id(message_id);
+        self.threads[src_idx].invalidate();
+
+        let _ = self.maildirs[target_idx].sync();
+        self.threads[target_idx].invalidate();
+    }
+
     fn move_selected_email(&mut self, target_mb_idx: usize) {
         let Some(thread) = self
             .threads
@@ -857,28 +914,8 @@ impl App {
         else {
             return;
         };
-        let path = thread.parent.path().clone();
         let message_id = thread.parent.message_id.clone();
-
-        let target_dir = self.maildirs[target_mb_idx].path().to_string();
-        let target_cur = std::path::Path::new(&target_dir).join("cur");
-        let Some(filename) = path.file_name() else {
-            return;
-        };
-        let dest = target_cur.join(filename);
-
-        if let Err(e) = std::fs::create_dir_all(&target_cur)
-            .and_then(|_| std::fs::rename(&path, &dest))
-        {
-            self.status_error = Some(e.to_string());
-            return;
-        }
-
-        self.maildirs[self.current_mb].remove_by_id(&message_id);
-        self.threads[self.current_mb].invalidate();
-
-        let _ = self.maildirs[target_mb_idx].sync();
-        self.threads[target_mb_idx].invalidate();
+        self.move_email_by_id(&message_id, self.current_mb, target_mb_idx);
     }
 }
 
@@ -1507,22 +1544,24 @@ mod tests {
 
     fn make_maildir_dir() -> std::path::PathBuf {
         let id = MOVE_TEST_ID.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "kingi-app-move-test-{}-{}",
-            std::process::id(),
-            id
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("kingi-app-move-test-{}-{}", std::process::id(), id));
         std::fs::create_dir_all(dir.join("new")).unwrap();
         std::fs::create_dir_all(dir.join("cur")).unwrap();
         dir
     }
 
     fn make_app_with_dirs(dirs: &[&std::path::Path]) -> App {
-        let mailboxes: Vec<config::Mailbox> = dirs
+        let labels: Vec<String> = (0..dirs.len()).map(|i| format!("MB{i}")).collect();
+        make_app_with_labeled_dirs(&labels, dirs)
+    }
+
+    fn make_app_with_labeled_dirs(labels: &[String], dirs: &[&std::path::Path]) -> App {
+        let mailboxes: Vec<config::Mailbox> = labels
             .iter()
-            .enumerate()
-            .map(|(i, d)| config::Mailbox {
-                label: format!("MB{i}"),
+            .zip(dirs.iter())
+            .map(|(label, d)| config::Mailbox {
+                label: label.clone(),
                 path: d.to_str().unwrap().to_string(),
             })
             .collect();
@@ -1532,8 +1571,10 @@ mod tests {
             .iter()
             .map(|m| Maildir::new(&m.path).unwrap())
             .collect();
-        let threads: Vec<ThreadsView> =
-            maildirs.iter().map(|m| ThreadsView::new(m.threads())).collect();
+        let threads: Vec<ThreadsView> = maildirs
+            .iter()
+            .map(|m| ThreadsView::new(m.threads()))
+            .collect();
         let mut sidebar_state = ListState::default();
         if !cfg.mailboxes.is_empty() {
             sidebar_state.select(Some(0));
@@ -1607,5 +1648,67 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    // ── trash ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn delete_moves_to_trash_when_configured() {
+        let inbox = make_maildir_dir();
+        let trash = make_maildir_dir();
+        let src_path = write_test_email(&inbox, "msg1:2,S");
+
+        let labels = vec!["Inbox".to_string(), "Trash".to_string()];
+        let mut app = make_app_with_labeled_dirs(&labels, &[&inbox, &trash]);
+        assert!(src_path.exists());
+
+        app.delete_selected_thread();
+
+        assert!(!src_path.exists(), "source file must be removed from inbox");
+        assert!(
+            trash.join("cur").join("msg1:2,S").exists(),
+            "file must appear in trash cur/"
+        );
+        assert_eq!(app.maildirs[0].email_count(), 0);
+        assert_eq!(app.maildirs[1].email_count(), 1);
+
+        let _ = std::fs::remove_dir_all(&inbox);
+        let _ = std::fs::remove_dir_all(&trash);
+    }
+
+    #[test]
+    fn delete_in_trash_permanently_removes() {
+        let inbox = make_maildir_dir();
+        let trash = make_maildir_dir();
+        let trash_path = write_test_email(&trash, "msg1:2,S");
+
+        let labels = vec!["Inbox".to_string(), "Trash".to_string()];
+        let mut app = make_app_with_labeled_dirs(&labels, &[&inbox, &trash]);
+        app.current_mb = 1;
+        app.sidebar_state.select(Some(1));
+
+        app.delete_selected_thread();
+
+        assert!(!trash_path.exists(), "file must be permanently deleted");
+        assert_eq!(app.maildirs[1].email_count(), 0);
+
+        let _ = std::fs::remove_dir_all(&inbox);
+        let _ = std::fs::remove_dir_all(&trash);
+    }
+
+    #[test]
+    fn delete_without_trash_permanently_removes() {
+        let inbox = make_maildir_dir();
+        let src_path = write_test_email(&inbox, "msg1:2,S");
+
+        let mut app = make_app_with_dirs(&[&inbox]);
+        assert!(src_path.exists());
+
+        app.delete_selected_thread();
+
+        assert!(!src_path.exists(), "file must be permanently deleted");
+        assert_eq!(app.maildirs[0].email_count(), 0);
+
+        let _ = std::fs::remove_dir_all(&inbox);
     }
 }

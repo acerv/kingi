@@ -14,6 +14,10 @@ impl Mailbox {
     pub fn is_drafts(&self) -> bool {
         self.label.to_lowercase() == "drafts"
     }
+
+    pub fn is_trash(&self) -> bool {
+        self.label.to_lowercase() == "trash"
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -282,6 +286,29 @@ password = "pass"
     fn is_drafts_does_not_match_other_labels() {
         assert!(!mb("Inbox").is_drafts());
         assert!(!mb("Sent").is_drafts());
+    }
+
+    // ── Mailbox::is_trash ─────────────────────────────────────────────────────
+
+    #[test]
+    fn is_trash_matches_exact_case() {
+        assert!(mb("Trash").is_trash());
+    }
+
+    #[test]
+    fn is_trash_matches_lowercase() {
+        assert!(mb("trash").is_trash());
+    }
+
+    #[test]
+    fn is_trash_matches_uppercase() {
+        assert!(mb("TRASH").is_trash());
+    }
+
+    #[test]
+    fn is_trash_does_not_match_other_labels() {
+        assert!(!mb("Inbox").is_trash());
+        assert!(!mb("Drafts").is_trash());
     }
 
     #[test]
