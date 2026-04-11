@@ -13,6 +13,7 @@ A terminal email client for Maildir folders, written in Rust.
 - Reply-all composition with quoting in `$VISUAL`/`$EDITOR`
 - Compose new emails from scratch
 - Draft saving to a dedicated Drafts mailbox
+- Trash mailbox support (delete moves to Trash; delete in Trash permanently removes)
 - Read/unread tracking via Maildir filename flags
 - Multiple mailboxes with sidebar
 - Tab-based email viewing
@@ -45,9 +46,18 @@ path  = "/home/you/Mail/Work/"
 # Optional: a mailbox labelled "Drafts" is treated specially.
 # Pressing Enter on a draft reopens it in the editor.
 # The send dialog offers a "Save as draft" option.
+# If omitted, a Drafts mailbox is created in ~/.config/kingi/drafts/.
 [[mailbox]]
 label = "Drafts"
 path  = "/home/you/Mail/Drafts/"
+
+# Optional: a mailbox labelled "Trash" is treated specially.
+# Deleting an email moves it to Trash; deleting from Trash
+# permanently removes it.
+# If omitted, a Trash mailbox is created in ~/.config/kingi/trash/.
+[[mailbox]]
+label = "Trash"
+path  = "/home/you/Mail/Trash/"
 
 # Optional: run a shell command every N seconds to sync mail.
 # Errors are shown in the status bar; the UI is never blocked.
@@ -82,6 +92,7 @@ Optional files (plain text, loaded from `~/.config/kingi/`):
 | `v`                   | Toggle read / unread                                       |
 | `Space`               | Toggle flagged (★)                                         |
 | `m`                   | Move email to another mailbox (popup picker)               |
+| `M`                   | Move entire thread to another mailbox                      |
 | `s`                   | Toggle sort order (descending / ascending)                 |
 | `N`                   | Toggle unread-only filter                                  |
 | `/`                   | Search by subject (live)                                   |
@@ -105,6 +116,7 @@ Optional files (plain text, loaded from `~/.config/kingi/`):
 | `R`                   | Reply (quoted)                   |
 | `f`                   | Forward email                    |
 | `m`                   | Move email to another mailbox    |
+| `M`                   | Move entire thread               |
 | `D`                   | Delete email and close tab       |
 | `q`                   | Close tab                        |
 
