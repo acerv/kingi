@@ -277,6 +277,11 @@ impl App {
         match (key.modifiers, key.code) {
             (_, KeyCode::Char('Q')) => return false,
             (KeyModifiers::CONTROL, KeyCode::Char('s')) => self.trigger_sync(),
+            (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
+                if let Some(tv) = self.threads.get(self.current_mb) {
+                    tv.mark_all_read();
+                }
+            }
             (_, KeyCode::Char(' ')) => self.toggle_flagged_thread(),
             (_, KeyCode::Char('D')) => self.delete_selected_thread(),
             (_, KeyCode::Char('V')) => {
@@ -1882,5 +1887,43 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    // ── mark all read ────────────────────────────────────────────────────────
+
+    fn write_unread_email(dir: &std::path::Path, filename: &str) {
+        let path = dir.join("new").join(filename);
+        let content = format!(
+            "Message-ID: <{filename}>\r\n\
+             From: Test <test@example.com>\r\n\
+             Subject: Test\r\n\
+             Date: Mon, 01 Jan 2024 00:00:00 +0000\r\n\
+             \r\n\
+             Body\r\n"
+        );
+        std::fs::write(&path, content).unwrap();
+    }
+
+    #[test]
+    fn ctrl_a_marks_all_as_read() {
+        let dir = make_maildir_dir();
+        write_unread_email(&dir, "msg1");
+        write_unread_email(&dir, "msg2");
+        write_test_email(&dir, "msg3:2,S");
+
+        let mut app = make_app_with_dirs(&[&dir]);
+        assert_eq!(app.maildirs[0].email_count(), 3);
+
+        app.handle_key(ctrl(KeyCode::Char('a')));
+
+        // Unread files should have moved from new/ to cur/ with S flag
+        assert!(!dir.join("new").join("msg1").exists());
+        assert!(!dir.join("new").join("msg2").exists());
+        assert!(dir.join("cur").join("msg1:2,S").exists());
+        assert!(dir.join("cur").join("msg2:2,S").exists());
+        // Already-read email unchanged
+        assert!(dir.join("cur").join("msg3:2,S").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

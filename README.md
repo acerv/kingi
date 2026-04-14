@@ -75,6 +75,7 @@ A plain-text `~/.config/kingi/signature` file, if present, is appended to every 
 | `f`               | Forward                                  |
 | `C`               | Compose new email                        |
 | `v`               | Toggle read / unread                     |
+| `Ctrl+A`          | Mark all emails as read                  |
 | `Space`           | Toggle flagged                           |
 | `m` / `M`         | Move email / move entire thread          |
 | `D`               | Delete email                             |

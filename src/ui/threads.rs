@@ -167,6 +167,15 @@ impl ThreadsView {
     pub fn search(&self) -> Option<&str> {
         self.search.as_deref()
     }
+
+    /// Mark every visible email as read.
+    pub fn mark_all_read(&self) {
+        for row in &self.rows {
+            if row.thread.parent.is_unread() {
+                row.thread.parent.mark(Flag::Seen);
+            }
+        }
+    }
 }
 
 /// Build a single `ListItem` for a thread row.
@@ -930,6 +939,12 @@ mod tests {
             content.contains('★'),
             "flagged indicator missing:\n{content}"
         );
+    }
+
+    #[test]
+    fn mark_all_read_on_empty_does_not_panic() {
+        let view = ThreadsView::new(tlist(vec![]));
+        view.mark_all_read();
     }
 
     #[test]
