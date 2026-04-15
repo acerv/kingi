@@ -733,18 +733,40 @@ impl App {
                 self.current_tab = i + 1;
                 return;
             }
-            if let Ok(ev) = EmailView::new(email, self.config.gpg_binary()) {
+        }
+
+        // Suspend / restore the TUI around GPG calls so that pinentry-curses
+        // (or any other terminal-based pinentry) can access the terminal.
+        let mut before_gpg = || {
+            let _ = disable_raw_mode();
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        };
+        let mut after_gpg = || {
+            let _ = enable_raw_mode();
+            let _ = execute!(io::stdout(), EnterAlternateScreen);
+        };
+
+        let gpg_binary = self.config.gpg_binary().to_string();
+        if self.current_tab == 0 {
+            if let Ok(ev) =
+                EmailView::new(email, &gpg_binary, &mut before_gpg, &mut after_gpg)
+            {
                 self.tabs.push(Tab::Email(Box::new(ev)));
                 self.current_tab = self.tabs.len();
             }
         } else {
-            // Email tab: replace the current tab in place.
             let ei = self.current_tab.saturating_sub(1);
-            if let Ok(ev) = EmailView::new(email, self.config.gpg_binary())
+            if let Ok(ev) =
+                EmailView::new(email, &gpg_binary, &mut before_gpg, &mut after_gpg)
                 && let Some(slot) = self.tabs.get_mut(ei)
             {
                 *slot = Tab::Email(Box::new(ev));
             }
+        }
+
+        // Force a full redraw in case the TUI was suspended for pinentry.
+        if let Some(ref mut t) = self.terminal {
+            let _ = t.clear();
         }
     }
 
