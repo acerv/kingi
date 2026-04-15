@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Andrea Cervesato <andrea.cervesato@suse.com>
 use crate::core::address::Address;
+use crate::core::gpg;
 
 /// A Maildir flag that can be set, queried, or cleared on an email file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +54,8 @@ pub struct Email {
     /// Unix timestamp (seconds since epoch) from the `Date:` header.
     /// `None` when the header is absent or unparseable.
     pub timestamp: Option<i64>,
+    /// Whether the email is PGP/MIME encrypted (detected from Content-Type).
+    pub is_encrypted: bool,
     /// Absolute path to the Maildir file that contains this message.
     /// Wrapped in `RefCell` so that `mark_as_read` / `mark_as_unread` can
     /// update the path through a shared `&self` reference (e.g. via `Rc`).
@@ -85,6 +88,7 @@ impl Email {
             .unwrap_or_default();
         let reply_to = parsed.in_reply_to().as_text().map(str::to_string);
         let subject = parsed.subject().unwrap_or_default().to_string();
+        let is_encrypted = gpg::is_pgp_mime_encrypted(&parsed);
 
         Ok(Self {
             message_id: id.clone(),
@@ -92,6 +96,7 @@ impl Email {
             from,
             subject,
             timestamp,
+            is_encrypted,
             path: RefCell::new(path.to_path_buf()),
         })
     }
@@ -270,6 +275,7 @@ impl Email {
             from: Address::new(from, ""),
             subject: subject.to_string(),
             timestamp,
+            is_encrypted: false,
             path: RefCell::new(path),
         }
     }
@@ -343,6 +349,7 @@ mod tests {
             from: Address::default(),
             subject: String::new(),
             timestamp: None,
+            is_encrypted: false,
             path: RefCell::new(path),
         }
     }

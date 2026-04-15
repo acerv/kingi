@@ -733,14 +733,14 @@ impl App {
                 self.current_tab = i + 1;
                 return;
             }
-            if let Ok(ev) = EmailView::new(email) {
+            if let Ok(ev) = EmailView::new(email, self.config.gpg_binary()) {
                 self.tabs.push(Tab::Email(Box::new(ev)));
                 self.current_tab = self.tabs.len();
             }
         } else {
             // Email tab: replace the current tab in place.
             let ei = self.current_tab.saturating_sub(1);
-            if let Ok(ev) = EmailView::new(email)
+            if let Ok(ev) = EmailView::new(email, self.config.gpg_binary())
                 && let Some(slot) = self.tabs.get_mut(ei)
             {
                 *slot = Tab::Email(Box::new(ev));
@@ -1100,6 +1100,7 @@ mod tests {
                 password: String::new(),
             },
             sync: None,
+            gpg: None,
         }
     }
 

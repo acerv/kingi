@@ -3,5 +3,6 @@
 pub mod address;
 pub mod config;
 pub mod date;
+pub mod gpg;
 pub mod maildir;
 pub mod thread;

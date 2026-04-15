@@ -219,12 +219,18 @@ fn build_row_item(row: &Row, subject_w: usize) -> ListItem<'static> {
     } else {
         Span::raw("  ")
     };
+    let encrypted_span = if e.is_encrypted {
+        Span::styled("⚷", Style::default().fg(Color::Magenta))
+    } else {
+        Span::raw(" ")
+    };
     ListItem::new(Line::from(vec![
         Span::styled(from, text_style),
         Span::raw(" "),
         Span::styled(indent, Style::default().fg(Color::DarkGray)),
         Span::styled(subject_padded, text_style),
         Span::raw(" "),
+        encrypted_span,
         flagged_span,
         replied_span,
         passed_span,
@@ -239,7 +245,7 @@ fn build_row_item(row: &Row, subject_w: usize) -> ListItem<'static> {
 pub fn draw(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, view: &mut ThreadsView) {
     const FROM_W: usize = 27;
     const DATE_W: usize = 16;
-    const FLAGS_W: usize = 4; // "★↩→ " etc.
+    const FLAGS_W: usize = 5; // "⚷★↩→ " etc.
     let usable = area.width.saturating_sub(2) as usize;
     let subject_w = usable.saturating_sub(FROM_W + DATE_W + FLAGS_W + 2);
 

@@ -35,12 +35,18 @@ pub struct Sync {
     pub interval: u64,
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct Gpg {
+    pub binary: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     #[serde(rename = "mailbox")]
     pub mailboxes: Vec<Mailbox>,
     pub smtp: Smtp,
     pub sync: Option<Sync>,
+    pub gpg: Option<Gpg>,
 }
 
 impl Config {
@@ -56,6 +62,14 @@ impl Config {
             .with_context(|| format!("cannot parse config file: {}", path.display()))?;
         config.ensure_defaults();
         Ok(config)
+    }
+
+    /// Return the configured GPG binary, defaulting to `"gpg"`.
+    pub fn gpg_binary(&self) -> &str {
+        self.gpg
+            .as_ref()
+            .and_then(|g| g.binary.as_deref())
+            .unwrap_or("gpg")
     }
 
     /// Ensure that Drafts and Trash mailboxes are always present.

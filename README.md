@@ -25,6 +25,7 @@ cargo install --path .
 - Move emails or entire threads between mailboxes
 - SMTP sending via STARTTLS
 - Periodic background sync via a configurable shell command (e.g. `mbsync`)
+- GPG decryption and signature verification (PGP/MIME and inline PGP)
 
 ## Configuration
 
@@ -59,6 +60,21 @@ interval = 60
 ```
 
 A plain-text `~/.config/kingi/signature` file, if present, is appended to every draft.
+
+### GPG
+
+Kingi automatically detects and decrypts PGP-encrypted emails and verifies
+PGP-signed emails when opened. Both PGP/MIME (RFC 3156) and inline PGP
+formats are supported. Encrypted emails are marked with a `⚷` icon in the
+thread list.
+
+A working `gpg-agent` is required for passphrase handling. To override the
+GPG binary path:
+
+```toml
+[gpg]
+binary = "gpg2"
+```
 
 ## Key bindings
 

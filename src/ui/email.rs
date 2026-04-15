@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Andrea Cervesato <andrea.cervesato@suse.com>
 use crate::core::address::Address;
+use crate::core::gpg::{self, CryptoStatus, InlinePgpType, PgpMimeType, VerifyResult};
 use crate::core::thread::Email;
 use anyhow::Result;
 use ratatui::{
@@ -23,10 +24,11 @@ pub struct EmailView {
     body_lines: Vec<Line<'static>>,
     scroll: u16,
     raw_body: String,
+    crypto_status: CryptoStatus,
 }
 
 impl EmailView {
-    pub fn new(email: &Email) -> Result<Self> {
+    pub fn new(email: &Email, gpg_binary: &str) -> Result<Self> {
         let msg = email.to_message()?;
 
         let message_id;
@@ -44,7 +46,10 @@ impl EmailView {
         let to = parse_addr_list(msg.to());
         let cc = parse_addr_list(msg.cc());
         let date = format_date(email.timestamp);
-        let raw_body = msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
+
+        // Detect and handle PGP content.
+        let (raw_body, crypto_status) = decrypt_or_verify(&msg, gpg_binary);
+
         let display_body = if raw_body.is_empty() {
             "— no text body —".to_string()
         } else {
@@ -68,6 +73,7 @@ impl EmailView {
             body_lines,
             scroll: 0,
             raw_body,
+            crypto_status,
         })
     }
 
@@ -124,8 +130,16 @@ pub fn draw(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, view: &mut 
     let cc_lines = wrap_header_field("Cc   : ", &cc_str, value_width);
     let subject_lines = wrap_header_field("Subj : ", view.subject(), value_width);
 
-    let header_height =
-        (from_lines.len() + to_lines.len() + cc_lines.len() + subject_lines.len() + 1 + 1) as u16;
+    let crypto_line = crypto_status_line(&view.crypto_status);
+    let crypto_height = if crypto_line.is_some() { 1 } else { 0 };
+
+    let header_height = (from_lines.len()
+        + to_lines.len()
+        + cc_lines.len()
+        + subject_lines.len()
+        + 1
+        + 1
+        + crypto_height) as u16;
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -141,6 +155,9 @@ pub fn draw(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, view: &mut 
         Span::raw(view.date.clone()),
     ]));
     header_text.extend(subject_lines);
+    if let Some(line) = crypto_line {
+        header_text.push(line);
+    }
 
     let header = Paragraph::new(header_text).block(Block::default().borders(Borders::BOTTOM));
     frame.render_widget(header, chunks[0]);
@@ -160,6 +177,83 @@ pub fn draw(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, view: &mut 
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/// Try to decrypt or verify PGP content, falling back to the plain body.
+fn decrypt_or_verify(msg: &mail_parser::Message, gpg_binary: &str) -> (String, CryptoStatus) {
+    // 1. Check for PGP/MIME (multipart/encrypted or multipart/signed).
+    if let Some(pgp_type) = gpg::detect_pgp_mime(msg) {
+        match pgp_type {
+            PgpMimeType::Encrypted => match gpg::decrypt_pgp_mime(msg, gpg_binary) {
+                Ok((body, status)) => return (body, status),
+                Err(e) => {
+                    let fallback = msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
+                    return (fallback, CryptoStatus::DecryptFailed(e.to_string()));
+                }
+            },
+            PgpMimeType::Signed => match gpg::verify_pgp_mime(msg, gpg_binary) {
+                Ok((body, status)) => return (body, status),
+                Err(e) => {
+                    let fallback = msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
+                    return (fallback, CryptoStatus::VerifyFailed(e.to_string()));
+                }
+            },
+        }
+    }
+
+    // 2. Check for inline PGP in the text body.
+    let body = msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
+
+    if let Some(inline_type) = gpg::detect_inline_pgp(&body) {
+        match inline_type {
+            InlinePgpType::Encrypted => match gpg::decrypt_inline_pgp(&body, gpg_binary) {
+                Ok((decrypted, status)) => return (decrypted, status),
+                Err(e) => return (body, CryptoStatus::DecryptFailed(e.to_string())),
+            },
+            InlinePgpType::Signed => match gpg::verify_inline_pgp(&body, gpg_binary) {
+                Ok((verified, status)) => return (verified, status),
+                Err(e) => return (body, CryptoStatus::VerifyFailed(e.to_string())),
+            },
+        }
+    }
+
+    // 3. No PGP content detected.
+    (body, CryptoStatus::None)
+}
+
+/// Build a status line for the crypto status, if any.
+fn crypto_status_line(status: &CryptoStatus) -> Option<Line<'static>> {
+    match status {
+        CryptoStatus::None => None,
+        CryptoStatus::Decrypted => Some(Line::from(Span::styled(
+            "[Decrypted]",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ))),
+        CryptoStatus::Signed(vr) => Some(verify_line("[Signed", vr)),
+        CryptoStatus::DecryptedAndSigned(vr) => Some(verify_line("[Decrypted + Signed", vr)),
+        CryptoStatus::DecryptFailed(err) => Some(Line::from(Span::styled(
+            format!("[Decryption failed: {err}]"),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ))),
+        CryptoStatus::VerifyFailed(err) => Some(Line::from(Span::styled(
+            format!("[Verification failed: {err}]"),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ))),
+    }
+}
+
+fn verify_line(prefix: &str, vr: &VerifyResult) -> Line<'static> {
+    let (text, color) = match vr {
+        VerifyResult::Good { signer } => (format!("{prefix}: {signer}]"), Color::Green),
+        VerifyResult::Bad { signer } => (format!("{prefix}: BAD {signer}]"), Color::Red),
+        VerifyResult::Unknown => (format!("{prefix}: unknown signer]"), Color::Yellow),
+    };
+    Line::from(Span::styled(
+        text,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ))
+}
 
 /// Parse a `mail_parser` address header into a list of `Address` values.
 fn parse_addr_list(list: Option<&mail_parser::Address>) -> Vec<Address> {
@@ -281,6 +375,7 @@ impl EmailView {
             body_lines: Vec::new(),
             scroll: 0,
             raw_body: String::new(),
+            crypto_status: CryptoStatus::None,
         }
     }
 }
@@ -316,7 +411,7 @@ mod tests {
     fn make_view(dir: &PathBuf, content: &str) -> EmailView {
         let path = write_email(dir, "msg", content);
         let email = Email::from_file(&path).unwrap();
-        EmailView::new(&email).unwrap()
+        EmailView::new(&email, "gpg").unwrap()
     }
 
     fn rendered_lines(view: &mut EmailView, w: u16, h: u16) -> Vec<String> {
@@ -358,7 +453,7 @@ mod tests {
             "Message-ID: <x@x>\r\nFrom: a@x.com\r\nTo: b@x.com\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\n\r\nbody",
         );
         let email = Email::from_file(&path).unwrap();
-        let view = EmailView::new(&email).unwrap();
+        let view = EmailView::new(&email, "gpg").unwrap();
         assert_eq!(view.subject(), "(no subject)");
     }
 
@@ -373,7 +468,7 @@ mod tests {
             "Message-ID: <unique-id@example.com>\r\nFrom: a@x.com\r\nTo: b@x.com\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\n\r\nbody",
         );
         let email = Email::from_file(&path).unwrap();
-        let view = EmailView::new(&email).unwrap();
+        let view = EmailView::new(&email, "gpg").unwrap();
         assert_eq!(view.message_id(), "unique-id@example.com");
     }
 
@@ -448,7 +543,7 @@ mod tests {
             "Message-ID: <x@x>\r\nFrom: a@x.com\r\nTo: b@x.com\r\nSubject: Hi\r\n\r\nbody",
         );
         let email = Email::from_file(&path).unwrap();
-        let view = EmailView::new(&email).unwrap();
+        let view = EmailView::new(&email, "gpg").unwrap();
         assert_eq!(view.date, "—");
     }
 
@@ -471,7 +566,7 @@ mod tests {
             "Message-ID: <x@x>\r\nFrom: a@x.com\r\nTo: b@x.com\r\nSubject: Hi\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\n\r\n",
         );
         let email = Email::from_file(&path).unwrap();
-        let view = EmailView::new(&email).unwrap();
+        let view = EmailView::new(&email, "gpg").unwrap();
         let text: String = view
             .body_lines
             .iter()
@@ -491,7 +586,7 @@ mod tests {
             None,
             PathBuf::from("/nonexistent/path/msg"),
         );
-        assert!(EmailView::new(&email).is_err());
+        assert!(EmailView::new(&email, "gpg").is_err());
     }
 
     // ── scroll ────────────────────────────────────────────────────────────────
