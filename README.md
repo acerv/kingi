@@ -5,6 +5,7 @@
 [![Rust](https://github.com/acerv/kingi/actions/workflows/rust.yml/badge.svg)](https://github.com/acerv/kingi/actions)
 
 A fast, Vim-inspired terminal email client for Maildir folders, written in Rust.
+Heavily inspired by [aerc](https://aerc-mail.org/).
 
 ![demo](demo.gif)
 
