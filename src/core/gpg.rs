@@ -83,14 +83,34 @@ pub fn detect_inline_pgp(body: &str) -> Option<InlinePgpType> {
 
 // ── GPG invocation helpers ───────────────────────────────────────────────────
 
+/// Resolve the current TTY path for `GPG_TTY` so that `gpg-agent` knows
+/// which terminal to send `pinentry` to.
+fn gpg_tty() -> Option<String> {
+    if let Ok(val) = std::env::var("GPG_TTY") {
+        return Some(val);
+    }
+    std::fs::read_link("/proc/self/fd/0")
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+}
+
+/// Apply `GPG_TTY` to a [`Command`].
+fn apply_gpg_tty(cmd: &mut Command) {
+    if let Some(tty) = gpg_tty() {
+        cmd.env("GPG_TTY", tty);
+    }
+}
+
 /// Run gpg with the given args, feeding `input` on stdin.
 /// Returns `(stdout, stderr)`.
 fn run_gpg(gpg_binary: &str, args: &[&str], input: &[u8]) -> Result<(Vec<u8>, String)> {
-    let mut child = Command::new(gpg_binary)
-        .args(args)
+    let mut cmd = Command::new(gpg_binary);
+    cmd.args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_gpg_tty(&mut cmd);
+    let mut child = cmd
         .spawn()
         .with_context(|| format!("failed to spawn {gpg_binary}"))?;
 
@@ -223,18 +243,20 @@ pub fn verify_pgp_mime(msg: &Message, gpg_binary: &str) -> Result<(String, Crypt
     std::fs::write(&signed_path, signed_bytes).context("failed to write signed data")?;
     std::fs::write(&sig_path, sig_bytes).context("failed to write signature")?;
 
-    let result = Command::new(gpg_binary)
-        .args([
-            "--verify",
-            "--batch",
-            "--status-fd",
-            "2",
-            sig_path.to_str().unwrap_or(""),
-            signed_path.to_str().unwrap_or(""),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut cmd = Command::new(gpg_binary);
+    cmd.args([
+        "--verify",
+        "--batch",
+        "--status-fd",
+        "2",
+        sig_path.to_str().unwrap_or(""),
+        signed_path.to_str().unwrap_or(""),
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    apply_gpg_tty(&mut cmd);
+    let result = cmd
         .output()
         .with_context(|| format!("failed to spawn {gpg_binary}"));
 
