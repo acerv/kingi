@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Andrea Cervesato <andrea.cervesato@suse.com>
-use super::app::{App, MoveMode, SearchMode, Tab};
+use super::app::{App, MoveMode, SearchMode, SendMode, Tab};
 use crate::core::config;
 use crate::core::maildir::{Maildir, SortOrder};
 use crate::ui::utils;
@@ -86,6 +86,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
 
     draw_statusbar(frame, chunks[3], app);
     draw_move_popup(frame, app);
+    draw_send_popup(frame, app);
 }
 
 pub fn draw_main(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &mut App) {
@@ -212,6 +213,19 @@ fn draw_move_popup(frame: &mut ratatui::Frame, app: &App) {
         };
         draw_list_popup(frame, title, labels, selected);
     }
+}
+
+fn draw_send_popup(frame: &mut ratatui::Frame, app: &App) {
+    let SendMode::Active {
+        selected,
+        ref actions,
+    } = app.send_mode
+    else {
+        return;
+    };
+
+    let labels: Vec<String> = actions.iter().map(|a| a.label().to_string()).collect();
+    draw_list_popup(frame, " Send message? ", &labels, selected);
 }
 
 pub fn draw_list_popup(frame: &mut ratatui::Frame, title: &str, items: &[String], selected: usize) {

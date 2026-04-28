@@ -8,7 +8,7 @@ use crate::ui::compose::{self, EmailCompose};
 use crate::ui::draw;
 use crate::ui::editor::Editor;
 use crate::ui::email::EmailView;
-use crate::ui::send::{SendAction, confirm_send, send_message};
+use crate::ui::send::{SendAction, send_message};
 use crate::ui::threads::ThreadsView;
 use arboard::Clipboard;
 use crossterm::{
@@ -38,6 +38,14 @@ pub(super) enum MoveMode {
     },
 }
 
+pub(super) enum SendMode {
+    Off,
+    Active {
+        selected: usize,
+        actions: Vec<SendAction>,
+    },
+}
+
 /// The origin of a compose tab, used to set the correct flag when sent.
 pub(super) enum ComposeKind {
     New,
@@ -62,6 +70,7 @@ pub struct App {
     pending_sync: Option<mpsc::Receiver<Option<String>>>,
     pub(super) search: SearchMode,
     pub(super) move_mode: MoveMode,
+    pub(super) send_mode: SendMode,
     pub(super) status_error: Option<String>,
     terminal: Option<Terminal<CrosstermBackend<io::Stdout>>>,
     address_book: AddressBook,
@@ -115,6 +124,7 @@ impl App {
             pending_sync: None,
             search: SearchMode::Off,
             move_mode: MoveMode::Off,
+            send_mode: SendMode::Off,
             status_error: None,
             terminal: Some(terminal),
             address_book,
@@ -244,6 +254,11 @@ impl App {
 
     /// Handle a key event. Returns `false` when the app should quit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if matches!(self.send_mode, SendMode::Active { .. }) {
+            self.handle_send_key(key);
+            return true;
+        }
+
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('n')) => {
                 self.next_tab();
@@ -379,27 +394,62 @@ impl App {
     }
 
     fn handle_compose_tab_key(&mut self, key: KeyEvent, ei: usize) {
-        let should_show_dialog = if let Tab::Compose(ref mut ed, _) = self.tabs[ei] {
+        if let Tab::Compose(ref mut ed, _) = self.tabs[ei] {
             match (key.modifiers, key.code) {
-                (KeyModifiers::CONTROL, KeyCode::Char('q')) => true,
+                (KeyModifiers::CONTROL, KeyCode::Char('q')) => {
+                    let has_drafts = self.config.mailboxes.iter().any(|mb| mb.is_drafts());
+                    let actions = if has_drafts {
+                        vec![SendAction::Send, SendAction::SaveDraft, SendAction::Discard]
+                    } else {
+                        vec![SendAction::Send, SendAction::Discard]
+                    };
+                    self.send_mode = SendMode::Active {
+                        selected: 0,
+                        actions,
+                    };
+                }
                 _ => {
                     let refresh = ed.on_key(key);
                     if refresh {
                         ed.update_autocomplete(&self.address_book);
                     }
-                    false
                 }
             }
-        } else {
-            false
-        };
-
-        if !should_show_dialog {
-            return;
         }
+    }
 
-        // Extract text and compose kind before borrowing terminal.
-        let (text, kind_id) = if let Tab::Compose(ref ed, ref kind) = self.tabs[ei] {
+    fn handle_send_key(&mut self, key: KeyEvent) {
+        let SendMode::Active {
+            ref mut selected,
+            ref actions,
+        } = self.send_mode
+        else {
+            return;
+        };
+        let count = actions.len();
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                *selected = (*selected + 1).min(count.saturating_sub(1));
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                *selected = selected.saturating_sub(1);
+            }
+            KeyCode::Esc => {
+                self.send_mode = SendMode::Off;
+            }
+            KeyCode::Enter => {
+                let sel = *selected;
+                let action = actions[sel].clone();
+                self.send_mode = SendMode::Off;
+                self.execute_send_action(&action);
+            }
+            _ => {}
+        }
+    }
+
+    fn execute_send_action(&mut self, action: &SendAction) {
+        let ei = self.current_tab.saturating_sub(1);
+        let (text, kind_id) = if let Some(Tab::Compose(ed, kind)) = self.tabs.get(ei) {
             let id = match kind {
                 ComposeKind::Reply(id) | ComposeKind::Forward(id) => Some(id.clone()),
                 ComposeKind::New => None,
@@ -410,24 +460,10 @@ impl App {
             return;
         };
 
-        let drafts_idx = self.config.mailboxes.iter().position(|mb| mb.is_drafts());
-        let mut action = SendAction::GoBack;
-        if let Some(ref mut terminal) = self.terminal {
-            match confirm_send(terminal, drafts_idx.is_some()) {
-                Ok(a) => action = a,
-                Err(e) => self.status_error = Some(e.to_string()),
-            }
-        }
-
-        // ESC: return to editor without closing
-        if action == SendAction::GoBack {
-            return;
-        }
-
         self.close_current_tab();
 
         match action {
-            SendAction::Sent => {
+            SendAction::Send => {
                 let draft = compose::Draft::parse(&text);
                 let mut addrs = draft.to.clone();
                 addrs.extend(draft.cc.clone());
@@ -455,6 +491,7 @@ impl App {
                 }
             }
             SendAction::SaveDraft => {
+                let drafts_idx = self.config.mailboxes.iter().position(|mb| mb.is_drafts());
                 if let Some(idx) = drafts_idx {
                     let from = Address::new(
                         self.config.smtp.name.as_deref().unwrap_or(""),
@@ -473,7 +510,7 @@ impl App {
                     }
                 }
             }
-            SendAction::Discard | SendAction::GoBack => {}
+            SendAction::Discard => {}
         }
     }
 
@@ -1191,6 +1228,7 @@ mod tests {
             pending_sync: None,
             search: SearchMode::Off,
             move_mode: MoveMode::Off,
+            send_mode: SendMode::Off,
             status_error: None,
             terminal: None,
             address_book: AddressBook::load(),
@@ -1765,6 +1803,7 @@ mod tests {
             pending_sync: None,
             search: SearchMode::Off,
             move_mode: MoveMode::Off,
+            send_mode: SendMode::Off,
             status_error: None,
             terminal: None,
             address_book: AddressBook::load(),

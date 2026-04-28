@@ -1,63 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Andrea Cervesato <andrea.cervesato@suse.com>
-use super::draw::draw_list_popup;
 use crate::core::address::Address;
 use crate::core::config::Smtp;
 use anyhow::anyhow;
-use crossterm::event::{self, Event, KeyCode};
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
-use std::io;
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum SendAction {
-    Sent,
-    Discard,
+    Send,
     SaveDraft,
-    GoBack,
+    Discard,
 }
 
-pub fn confirm_send(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    has_drafts: bool,
-) -> anyhow::Result<SendAction> {
-    let labels: &[&str] = if has_drafts {
-        &["Send Email", "Save as draft", "Discard"]
-    } else {
-        &["Send Email", "Discard"]
-    };
-
-    let to_action = |idx: usize| match labels[idx] {
-        "Send Email" => SendAction::Sent,
-        "Save as draft" => SendAction::SaveDraft,
-        _ => SendAction::Discard,
-    };
-
-    let owned: Vec<String> = labels.iter().map(|s| s.to_string()).collect();
-    let mut selected: usize = 0;
-
-    loop {
-        let sel = selected;
-        terminal.draw(|frame| {
-            draw_list_popup(frame, " Send message? ", &owned, sel);
-        })?;
-
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    selected = (selected + 1).min(labels.len().saturating_sub(1));
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    selected = selected.saturating_sub(1);
-                }
-                KeyCode::Enter => {
-                    return Ok(to_action(selected));
-                }
-                KeyCode::Esc => {
-                    return Ok(SendAction::GoBack);
-                }
-                _ => {}
-            }
+impl SendAction {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Send => "Send Email",
+            Self::SaveDraft => "Save as draft",
+            Self::Discard => "Discard",
         }
     }
 }
