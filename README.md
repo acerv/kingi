@@ -26,6 +26,7 @@ cargo install --path .
 - Move emails or entire threads between mailboxes
 - SMTP sending via STARTTLS
 - Periodic background sync via a configurable shell command (e.g. `mbsync`)
+- Quick reply templates bound to number keys (`1`-`9`, `0`)
 - GPG decryption and signature verification (PGP/MIME and inline PGP)
 
 ## Configuration
@@ -62,6 +63,20 @@ interval = 60
 
 A plain-text `~/.config/kingi/signature` file, if present, is appended to every draft.
 
+### Quick replies
+
+Place template files named `reply-1` through `reply-9` and `reply-0` in the
+config directory (`~/.config/kingi/`). Pressing the corresponding number key
+on an email opens a reply pre-filled with that template's content.
+
+For example, create `~/.config/kingi/reply-1`:
+
+```
+Thanks for the patch, applied!
+```
+
+Then press `1` on any email to reply with that text.
+
 ### GPG
 
 Kingi automatically detects and decrypts PGP-encrypted emails and verifies
@@ -89,6 +104,7 @@ binary = "gpg2"
 | `J` / `K`         | Next / previous mailbox                  |
 | `Enter`           | Open email (in Drafts: reopen in editor) |
 | `r` / `R`         | Reply-all / reply-all quoted             |
+| `1`-`9`, `0`      | Quick reply with template                |
 | `f`               | Forward                                  |
 | `C`               | Compose new email                        |
 | `v`               | Toggle read / unread                     |
@@ -112,6 +128,7 @@ binary = "gpg2"
 | `J` / `K`         | Next / previous email    |
 | `Y`               | Copy body to clipboard   |
 | `r` / `R`         | Reply / reply quoted     |
+| `1`-`9`, `0`      | Quick reply with template|
 | `f`               | Forward                  |
 | `m` / `M`         | Move email / move thread |
 | `D`               | Delete and close tab     |

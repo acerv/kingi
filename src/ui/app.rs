@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Andrea Cervesato <andrea.cervesato@suse.com>
 use crate::core::address::{Address, AddressBook};
-use crate::core::config::{Config, Mailbox};
+use crate::core::config::{self, Config, Mailbox};
 use crate::core::maildir::Maildir;
 use crate::core::thread::{Email, Flag};
 use crate::ui::compose::{self, EmailCompose};
@@ -360,6 +360,7 @@ impl App {
             (_, KeyCode::Char('r')) => self.open_reply_from_thread(false),
             (_, KeyCode::Char('R')) => self.open_reply_from_thread(true),
             (_, KeyCode::Char('f')) => self.open_forward_from_thread(),
+            (_, KeyCode::Char(c @ '0'..='9')) => self.open_quick_reply_from_thread(c),
             _ => {}
         }
         true
@@ -527,6 +528,7 @@ impl App {
             (_, KeyCode::Char('r')) => self.open_reply_from_tab(false),
             (_, KeyCode::Char('R')) => self.open_reply_from_tab(true),
             (_, KeyCode::Char('f')) => self.open_forward_from_tab(),
+            (_, KeyCode::Char(c @ '0'..='9')) => self.open_quick_reply_from_tab(c),
             (_, KeyCode::Char('Y')) => {
                 if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
                     let raw = ev.raw_body();
@@ -748,16 +750,13 @@ impl App {
 
         let gpg_binary = self.config.gpg_binary().to_string();
         if self.current_tab == 0 {
-            if let Ok(ev) =
-                EmailView::new(email, &gpg_binary, &mut before_gpg, &mut after_gpg)
-            {
+            if let Ok(ev) = EmailView::new(email, &gpg_binary, &mut before_gpg, &mut after_gpg) {
                 self.tabs.push(Tab::Email(Box::new(ev)));
                 self.current_tab = self.tabs.len();
             }
         } else {
             let ei = self.current_tab.saturating_sub(1);
-            if let Ok(ev) =
-                EmailView::new(email, &gpg_binary, &mut before_gpg, &mut after_gpg)
+            if let Ok(ev) = EmailView::new(email, &gpg_binary, &mut before_gpg, &mut after_gpg)
                 && let Some(slot) = self.tabs.get_mut(ei)
             {
                 *slot = Tab::Email(Box::new(ev));
@@ -810,6 +809,50 @@ impl App {
             Ok(email) => {
                 let id = email.message_id.clone();
                 match email.reply_draft(quote, &self.config.smtp.username) {
+                    Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
+                    Err(e) => self.status_error = Some(e.to_string()),
+                }
+            }
+            Err(e) => self.status_error = Some(e.to_string()),
+        }
+    }
+
+    fn open_quick_reply_from_thread(&mut self, key: char) {
+        let n = key as u8 - b'0';
+        let Some(template) = config::load_reply_template(n) else {
+            return;
+        };
+        let Some(thread) = self
+            .threads
+            .get(self.current_mb)
+            .and_then(|tv| tv.selected())
+        else {
+            return;
+        };
+        let id = thread.parent.message_id.clone();
+        match thread
+            .parent
+            .quick_reply_draft(&template, &self.config.smtp.username)
+        {
+            Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
+            Err(e) => self.status_error = Some(e.to_string()),
+        }
+    }
+
+    fn open_quick_reply_from_tab(&mut self, key: char) {
+        let n = key as u8 - b'0';
+        let Some(template) = config::load_reply_template(n) else {
+            return;
+        };
+        let ei = self.current_tab.saturating_sub(1);
+        let Some(Tab::Email(ev)) = self.tabs.get(ei) else {
+            return;
+        };
+        let path = ev.path().to_path_buf();
+        match Email::from_file(&path) {
+            Ok(email) => {
+                let id = email.message_id.clone();
+                match email.quick_reply_draft(&template, &self.config.smtp.username) {
                     Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
                     Err(e) => self.status_error = Some(e.to_string()),
                 }

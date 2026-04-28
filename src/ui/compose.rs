@@ -123,6 +123,9 @@ pub trait EmailCompose {
     /// - In-Reply-To: referencing this message
     /// - Body: optionally quoted with ">" prefix
     fn reply_draft(&self, quote: bool, own_address: &str) -> Result<String>;
+
+    /// Generate a reply draft pre-filled with a template body.
+    fn quick_reply_draft(&self, template: &str, own_address: &str) -> Result<String>;
 }
 
 impl EmailCompose for Email {
@@ -187,42 +190,7 @@ impl EmailCompose for Email {
 
     fn reply_draft(&self, quote: bool, own_address: &str) -> Result<String> {
         let msg = self.to_message()?;
-
-        let reply_subject = if self.subject.starts_with("Re:") || self.subject.starts_with("re:") {
-            self.subject.clone()
-        } else {
-            format!("Re: {}", self.subject)
-        };
-
-        // Cc = original To + original Cc, minus own address
-        let parse_addrs = |a: Option<&mail_parser::Address<'_>>| -> Vec<Address> {
-            a.map(|a| a.iter().map(Address::from).collect())
-                .unwrap_or_default()
-        };
-        let mut cc_addrs: Vec<Address> = parse_addrs(msg.to())
-            .into_iter()
-            .chain(parse_addrs(msg.cc()))
-            .filter(|a| a.address().to_lowercase() != own_address.to_lowercase())
-            .collect();
-        // Deduplicate by address
-        let mut seen = std::collections::HashSet::new();
-        cc_addrs.retain(|a| seen.insert(a.address().to_lowercase()));
-        let cc = cc_addrs
-            .iter()
-            .map(|a| a.full())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let mut draft = format!(
-            "To: {}\nSubject: {}\nIn-Reply-To: <{}>\n",
-            self.from.full(),
-            reply_subject,
-            self.message_id
-        );
-
-        if !cc.is_empty() {
-            draft.push_str(&format!("Cc: {}\n", cc));
-        }
+        let mut draft = reply_headers(self, &msg, own_address);
 
         draft.push_str(&format!("{}\n", BODY_SENTINEL));
 
@@ -239,6 +207,61 @@ impl EmailCompose for Email {
 
         Ok(draft)
     }
+
+    fn quick_reply_draft(&self, template: &str, own_address: &str) -> Result<String> {
+        let msg = self.to_message()?;
+        let mut draft = reply_headers(self, &msg, own_address);
+
+        draft.push_str(&format!("{}\n", BODY_SENTINEL));
+        draft.push_str(template);
+        if !template.ends_with('\n') {
+            draft.push('\n');
+        }
+
+        if let Some(sig) = config::load_signature() {
+            draft.push_str(&format!("\n--\n{}\n", sig));
+        }
+
+        Ok(draft)
+    }
+}
+
+fn reply_headers(email: &Email, msg: &mail_parser::Message, own_address: &str) -> String {
+    let reply_subject = if email.subject.starts_with("Re:") || email.subject.starts_with("re:") {
+        email.subject.clone()
+    } else {
+        format!("Re: {}", email.subject)
+    };
+
+    let parse_addrs = |a: Option<&mail_parser::Address<'_>>| -> Vec<Address> {
+        a.map(|a| a.iter().map(Address::from).collect())
+            .unwrap_or_default()
+    };
+    let mut cc_addrs: Vec<Address> = parse_addrs(msg.to())
+        .into_iter()
+        .chain(parse_addrs(msg.cc()))
+        .filter(|a| a.address().to_lowercase() != own_address.to_lowercase())
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    cc_addrs.retain(|a| seen.insert(a.address().to_lowercase()));
+    let cc = cc_addrs
+        .iter()
+        .map(|a| a.full())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut headers = format!(
+        "To: {}\nSubject: {}\nIn-Reply-To: <{}>\n",
+        email.from.full(),
+        reply_subject,
+        email.message_id
+    );
+
+    if !cc.is_empty() {
+        headers.push_str(&format!("Cc: {}\n", cc));
+    }
+
+    headers
 }
 
 #[cfg(test)]
@@ -529,6 +552,88 @@ mod tests {
         assert!(
             draft.contains("alice@x.com"),
             "attribution must include original sender: {draft}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── quick_reply_draft ───────────────────────────────────────────────────
+
+    #[test]
+    fn quick_reply_draft_contains_template_body() {
+        let content = "Message-ID: <id@test>\r\nFrom: alice@x.com\r\nTo: me@x.com\r\nSubject: Hi\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\nBody\r\n";
+        let path = write_tmp_email(content);
+        let email = crate::core::thread::Email::from_file(&path).unwrap();
+        let draft = email.quick_reply_draft("Thanks for the patch!", "me@x.com").unwrap();
+        assert!(
+            draft.contains("Thanks for the patch!"),
+            "draft must contain template body: {draft}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn quick_reply_draft_has_reply_headers() {
+        let content = "Message-ID: <id@test>\r\nFrom: alice@x.com\r\nTo: me@x.com\r\nSubject: Hello\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\nBody\r\n";
+        let path = write_tmp_email(content);
+        let email = crate::core::thread::Email::from_file(&path).unwrap();
+        let draft = email.quick_reply_draft("Acked", "me@x.com").unwrap();
+        assert!(
+            draft.contains("To: alice@x.com"),
+            "To must be original sender: {draft}"
+        );
+        assert!(
+            draft.contains("Subject: Re: Hello"),
+            "subject must have Re: prefix: {draft}"
+        );
+        assert!(
+            draft.contains("In-Reply-To: <id@test>"),
+            "must have In-Reply-To: {draft}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn quick_reply_draft_does_not_double_re_prefix() {
+        let content = "Message-ID: <id@test>\r\nFrom: alice@x.com\r\nTo: me@x.com\r\nSubject: Re: Hello\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\nBody\r\n";
+        let path = write_tmp_email(content);
+        let email = crate::core::thread::Email::from_file(&path).unwrap();
+        let draft = email.quick_reply_draft("Acked", "me@x.com").unwrap();
+        assert!(
+            !draft.contains("Re: Re:"),
+            "subject must not double Re: prefix: {draft}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn quick_reply_draft_cc_excludes_own_address() {
+        let content = "Message-ID: <id@test>\r\nFrom: alice@x.com\r\nTo: me@x.com, bob@x.com\r\nSubject: Hi\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\nBody\r\n";
+        let path = write_tmp_email(content);
+        let email = crate::core::thread::Email::from_file(&path).unwrap();
+        let draft = email.quick_reply_draft("Thanks", "me@x.com").unwrap();
+        let cc_line = draft.lines().find(|l| l.starts_with("Cc:")).unwrap_or("");
+        assert!(
+            !cc_line.contains("me@x.com"),
+            "own address must not appear in Cc: {draft}"
+        );
+        assert!(
+            draft.contains("bob@x.com"),
+            "other recipients should be in Cc: {draft}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn quick_reply_draft_appends_newline_to_template() {
+        let content = "Message-ID: <id@test>\r\nFrom: alice@x.com\r\nTo: me@x.com\r\nSubject: Hi\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\nBody\r\n";
+        let path = write_tmp_email(content);
+        let email = crate::core::thread::Email::from_file(&path).unwrap();
+        let draft = email.quick_reply_draft("No trailing newline", "me@x.com").unwrap();
+        let body_start = draft.find(BODY_SENTINEL).unwrap() + BODY_SENTINEL.len() + 1;
+        let body = &draft[body_start..];
+        assert!(
+            body.starts_with("No trailing newline\n"),
+            "template without trailing newline must get one appended: {draft}"
         );
         let _ = std::fs::remove_file(&path);
     }

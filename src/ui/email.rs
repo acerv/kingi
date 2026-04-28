@@ -203,8 +203,7 @@ fn decrypt_or_verify(
                 match result {
                     Ok((body, status)) => return (body, status),
                     Err(e) => {
-                        let fallback =
-                            msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
+                        let fallback = msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
                         return (fallback, CryptoStatus::DecryptFailed(e.to_string()));
                     }
                 }
@@ -216,8 +215,7 @@ fn decrypt_or_verify(
                 match result {
                     Ok((body, status)) => return (body, status),
                     Err(e) => {
-                        let fallback =
-                            msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
+                        let fallback = msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
                         return (fallback, CryptoStatus::VerifyFailed(e.to_string()));
                     }
                 }

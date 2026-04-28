@@ -99,6 +99,11 @@ pub fn load_signature() -> Option<String> {
     std::fs::read_to_string(config_dir().join("signature")).ok()
 }
 
+/// Read `reply-N` template from the kingi config directory if it exists.
+pub fn load_reply_template(n: u8) -> Option<String> {
+    std::fs::read_to_string(config_dir().join(format!("reply-{n}"))).ok()
+}
+
 /// The kingi configuration directory (`$XDG_CONFIG_HOME/kingi` or
 /// `~/.config/kingi`).
 pub fn config_dir() -> PathBuf {
@@ -416,6 +421,53 @@ password = "pass"
         with_xdg(&dir, || {
             let err = Config::load().unwrap_err();
             assert!(err.to_string().contains("cannot parse config file"));
+        });
+    }
+
+    // ── load_reply_template ──────────────────────────────────────────────────
+
+    #[test]
+    fn load_reply_template_returns_none_when_missing() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        with_xdg(&dir, || {
+            assert!(load_reply_template(1).is_none());
+        });
+    }
+
+    #[test]
+    fn load_reply_template_returns_content() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
+        fs::write(kingi_dir.join("reply-1"), "Thanks for the patch!").unwrap();
+        with_xdg(&dir, || {
+            assert_eq!(
+                load_reply_template(1),
+                Some("Thanks for the patch!".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn load_reply_template_loads_correct_digit() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
+        fs::write(kingi_dir.join("reply-3"), "Template three").unwrap();
+        fs::write(kingi_dir.join("reply-0"), "Template zero").unwrap();
+        with_xdg(&dir, || {
+            assert_eq!(
+                load_reply_template(3),
+                Some("Template three".to_string())
+            );
+            assert_eq!(
+                load_reply_template(0),
+                Some("Template zero".to_string())
+            );
+            assert!(load_reply_template(5).is_none());
         });
     }
 }
