@@ -6,6 +6,7 @@ pub mod compose;
 pub mod draw;
 pub mod editor;
 pub mod email;
+pub mod help;
 pub mod send;
 pub mod threads;
 pub mod utils;

@@ -87,6 +87,10 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     draw_statusbar(frame, chunks[3], app);
     draw_move_popup(frame, app);
     draw_send_popup(frame, app);
+
+    if let Some(ref mut hv) = app.help {
+        hv.draw(frame, area);
+    }
 }
 
 pub fn draw_main(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &mut App) {

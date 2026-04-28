@@ -8,6 +8,7 @@ use crate::ui::compose::{self, EmailCompose};
 use crate::ui::draw;
 use crate::ui::editor::Editor;
 use crate::ui::email::EmailView;
+use crate::ui::help::{HelpAction, HelpView};
 use crate::ui::send::{SendAction, send_message};
 use crate::ui::threads::ThreadsView;
 use arboard::Clipboard;
@@ -71,6 +72,7 @@ pub struct App {
     pub(super) search: SearchMode,
     pub(super) move_mode: MoveMode,
     pub(super) send_mode: SendMode,
+    pub(super) help: Option<HelpView>,
     pub(super) status_error: Option<String>,
     terminal: Option<Terminal<CrosstermBackend<io::Stdout>>>,
     address_book: AddressBook,
@@ -125,6 +127,7 @@ impl App {
             search: SearchMode::Off,
             move_mode: MoveMode::Off,
             send_mode: SendMode::Off,
+            help: None,
             status_error: None,
             terminal: Some(terminal),
             address_book,
@@ -254,6 +257,13 @@ impl App {
 
     /// Handle a key event. Returns `false` when the app should quit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if let Some(ref mut hv) = self.help {
+            if hv.on_key(key) == HelpAction::Close {
+                self.help = None;
+            }
+            return true;
+        }
+
         if matches!(self.send_mode, SendMode::Active { .. }) {
             self.handle_send_key(key);
             return true;
@@ -376,6 +386,7 @@ impl App {
             (_, KeyCode::Char('R')) => self.open_reply_from_thread(true),
             (_, KeyCode::Char('f')) => self.open_forward_from_thread(),
             (_, KeyCode::Char(c @ '0'..='9')) => self.open_quick_reply_from_thread(c),
+            (_, KeyCode::Char('?')) => self.help = Some(HelpView::new()),
             _ => {}
         }
         true
@@ -566,6 +577,7 @@ impl App {
             (_, KeyCode::Char('R')) => self.open_reply_from_tab(true),
             (_, KeyCode::Char('f')) => self.open_forward_from_tab(),
             (_, KeyCode::Char(c @ '0'..='9')) => self.open_quick_reply_from_tab(c),
+            (_, KeyCode::Char('?')) => self.help = Some(HelpView::new()),
             (_, KeyCode::Char('Y')) => {
                 if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
                     let raw = ev.raw_body();
@@ -1229,6 +1241,7 @@ mod tests {
             search: SearchMode::Off,
             move_mode: MoveMode::Off,
             send_mode: SendMode::Off,
+            help: None,
             status_error: None,
             terminal: None,
             address_book: AddressBook::load(),
@@ -1804,6 +1817,7 @@ mod tests {
             search: SearchMode::Off,
             move_mode: MoveMode::Off,
             send_mode: SendMode::Off,
+            help: None,
             status_error: None,
             terminal: None,
             address_book: AddressBook::load(),

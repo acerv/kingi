@@ -116,6 +116,7 @@ binary = "gpg2"
 | `N`               | Toggle unread-only filter                |
 | `/` / `Esc`       | Search by subject / clear search         |
 | `Ctrl+S`          | Force sync                               |
+| `?`               | Help                                     |
 | `Q`               | Quit                                     |
 
 ### Email tab
@@ -132,6 +133,7 @@ binary = "gpg2"
 | `f`               | Forward                  |
 | `m` / `M`         | Move email / move thread |
 | `D`               | Delete and close tab     |
+| `?`               | Help                     |
 | `q`               | Close tab                |
 
 ### Compose
