@@ -326,8 +326,26 @@ fn format_date(ts: Option<i64>) -> String {
 }
 
 fn highlight_body(body: &str) -> Vec<Line<'static>> {
+    let mut in_diff = false;
     body.lines()
-        .map(|raw| highlight_line_owned(expand_tabs(raw)))
+        .map(|raw| {
+            let expanded = expand_tabs(raw);
+            if expanded.starts_with("diff ")
+                || expanded.starts_with("--- ")
+                || expanded.starts_with("+++ ")
+            {
+                in_diff = true;
+            } else if in_diff
+                && !expanded.starts_with("@@")
+                && !expanded.starts_with('+')
+                && !expanded.starts_with('-')
+                && !expanded.starts_with(' ')
+                && !expanded.is_empty()
+            {
+                in_diff = false;
+            }
+            highlight_line_owned(expanded, in_diff)
+        })
         .collect()
 }
 
@@ -349,18 +367,18 @@ fn expand_tabs(s: &str) -> String {
     out
 }
 
-fn highlight_line_owned(raw: String) -> Line<'static> {
-    let style = if raw.starts_with("---") {
+fn highlight_line_owned(raw: String, in_diff: bool) -> Line<'static> {
+    let style = if raw.starts_with("--- ") && in_diff {
         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-    } else if raw.starts_with("+++") {
+    } else if raw.starts_with("+++ ") && in_diff {
         Style::default()
             .fg(Color::Green)
             .add_modifier(Modifier::BOLD)
-    } else if raw.starts_with("@@") {
+    } else if raw.starts_with("@@") && in_diff {
         Style::default().fg(Color::Cyan)
-    } else if raw.starts_with('-') {
+    } else if raw.starts_with('-') && in_diff {
         Style::default().fg(Color::Red)
-    } else if raw.starts_with('+') {
+    } else if raw.starts_with('+') && in_diff {
         Style::default().fg(Color::Green)
     } else if raw.starts_with('>') {
         Style::default().fg(Color::Blue)
@@ -724,5 +742,62 @@ mod tests {
         view.scroll_down(1000);
         assert!(view.scroll > 0);
         rendered_lines(&mut view, 80, 20); // must not panic with scroll set
+    }
+
+    // ── highlight_body ──────────────────────────────────────────────────────
+
+    fn line_fg(line: &Line) -> Option<Color> {
+        line.spans.first().and_then(|s| s.style.fg)
+    }
+
+    #[test]
+    fn highlight_diff_lines_inside_hunk() {
+        let body = "some text\n\
+                     diff --git a/foo b/foo\n\
+                     --- a/foo\n\
+                     +++ b/foo\n\
+                     @@ -1,3 +1,3 @@\n\
+                     -old line\n\
+                     +new line\n\
+                      context\n";
+        let lines = highlight_body(body);
+        assert_eq!(line_fg(&lines[2]), Some(Color::Red), "--- header");
+        assert_eq!(line_fg(&lines[3]), Some(Color::Green), "+++ header");
+        assert_eq!(line_fg(&lines[4]), Some(Color::Cyan), "@@ hunk");
+        assert_eq!(line_fg(&lines[5]), Some(Color::Red), "- removal");
+        assert_eq!(line_fg(&lines[6]), Some(Color::Green), "+ addition");
+    }
+
+    #[test]
+    fn highlight_dash_outside_diff_is_plain() {
+        let body = "- item one\n- item two\n+ not a diff\n";
+        let lines = highlight_body(body);
+        assert_eq!(line_fg(&lines[0]), None, "- outside diff");
+        assert_eq!(line_fg(&lines[1]), None, "- outside diff");
+        assert_eq!(line_fg(&lines[2]), None, "+ outside diff");
+    }
+
+    #[test]
+    fn highlight_diff_ends_at_non_diff_line() {
+        let body = "diff --git a/f b/f\n\
+                     --- a/f\n\
+                     +++ b/f\n\
+                     @@ -1 +1 @@\n\
+                     -old\n\
+                     +new\n\
+                     This is a normal paragraph.\n\
+                     - this is a list item\n";
+        let lines = highlight_body(body);
+        assert_eq!(line_fg(&lines[4]), Some(Color::Red), "- in diff");
+        assert_eq!(line_fg(&lines[5]), Some(Color::Green), "+ in diff");
+        assert_eq!(line_fg(&lines[7]), None, "- after diff ended");
+    }
+
+    #[test]
+    fn highlight_quoted_text_always_colored() {
+        let body = "> quoted reply\n- list item\n";
+        let lines = highlight_body(body);
+        assert_eq!(line_fg(&lines[0]), Some(Color::Blue), "> quote");
+        assert_eq!(line_fg(&lines[1]), None, "- outside diff");
     }
 }
