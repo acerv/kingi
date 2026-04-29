@@ -28,6 +28,7 @@ pub struct ThreadsView {
     rows: Vec<Row>,
     unread_only: bool,
     search: Option<(String, Regex)>,
+    sender_search: Option<(String, Regex)>,
 }
 
 impl ThreadsView {
@@ -44,6 +45,7 @@ impl ThreadsView {
             rows: Vec::new(),
             unread_only: false,
             search: None,
+            sender_search: None,
         };
         view.flatten();
         if !view.rows.is_empty() {
@@ -129,6 +131,11 @@ impl ThreadsView {
                 .retain(|r| re.is_match(&r.thread.parent.subject));
         }
 
+        if let Some((_, ref re)) = self.sender_search {
+            self.rows
+                .retain(|r| re.is_match(&r.thread.parent.from.to_string()));
+        }
+
         let new_idx = selected_id
             .and_then(|id| {
                 self.rows
@@ -195,6 +202,43 @@ impl ThreadsView {
     /// Return the current search query, if any.
     pub fn search(&self) -> Option<&str> {
         self.search.as_ref().map(|(q, _)| q.as_str())
+    }
+
+    /// Set or clear the sender search filter and refresh.
+    pub fn set_sender_search(&mut self, query: Option<&str>) {
+        self.sender_search = query.map(|q| {
+            let q = if q.len() > MAX_SEARCH_LEN {
+                &q[..MAX_SEARCH_LEN]
+            } else {
+                q
+            };
+            let re = RegexBuilder::new(q)
+                .case_insensitive(true)
+                .size_limit(REGEX_SIZE_LIMIT)
+                .build()
+                .unwrap_or_else(|_| {
+                    RegexBuilder::new(&regex::escape(q))
+                        .case_insensitive(true)
+                        .build()
+                        .unwrap()
+                });
+            (q.to_string(), re)
+        });
+        self.invalidate();
+        if query.is_some() {
+            if !self.rows.is_empty() {
+                self.state.select(Some(0));
+            }
+            *self.state.offset_mut() = 0;
+        } else {
+            let idx = self.state.selected().unwrap_or(0);
+            *self.state.offset_mut() = idx.saturating_sub(4);
+        }
+    }
+
+    /// Return the current sender search query, if any.
+    pub fn sender_search(&self) -> Option<&str> {
+        self.sender_search.as_ref().map(|(q, _)| q.as_str())
     }
 
     /// Mark every visible email as read.

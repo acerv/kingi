@@ -30,6 +30,11 @@ pub(super) enum SearchMode {
     Applied,
 }
 
+pub(super) enum LastSearch {
+    Subject,
+    Sender,
+}
+
 pub(super) enum MoveMode {
     Off,
     Active {
@@ -70,6 +75,8 @@ pub struct App {
     pub(super) current_mb: usize,
     pending_sync: Option<mpsc::Receiver<Option<String>>>,
     pub(super) search: SearchMode,
+    pub(super) sender_search: SearchMode,
+    pub(super) last_search: LastSearch,
     pub(super) move_mode: MoveMode,
     pub(super) send_mode: SendMode,
     pub(super) help: Option<HelpView>,
@@ -125,6 +132,8 @@ impl App {
             current_mb: 0,
             pending_sync: None,
             search: SearchMode::Off,
+            sender_search: SearchMode::Off,
+            last_search: LastSearch::Subject,
             move_mode: MoveMode::Off,
             send_mode: SendMode::Off,
             help: None,
@@ -286,6 +295,11 @@ impl App {
             return true;
         }
 
+        if matches!(self.sender_search, SearchMode::Typing(_)) {
+            self.handle_sender_search_key(key);
+            return true;
+        }
+
         if matches!(self.move_mode, MoveMode::Active { .. }) {
             self.handle_move_key(key);
             return true;
@@ -365,7 +379,28 @@ impl App {
                     .to_string();
                 self.search = SearchMode::Typing(prev);
             }
-            (_, KeyCode::Esc) => self.reset_search(),
+            (_, KeyCode::Char('\\')) => {
+                let prev = self
+                    .threads
+                    .get(self.current_mb)
+                    .and_then(|tv| tv.sender_search())
+                    .unwrap_or("")
+                    .to_string();
+                self.sender_search = SearchMode::Typing(prev);
+            }
+            (_, KeyCode::Esc) => {
+                if matches!(self.last_search, LastSearch::Sender)
+                    && matches!(self.sender_search, SearchMode::Applied)
+                {
+                    self.reset_sender_search();
+                    self.last_search = LastSearch::Subject;
+                } else if matches!(self.search, SearchMode::Applied) {
+                    self.reset_search();
+                    self.last_search = LastSearch::Sender;
+                } else if matches!(self.sender_search, SearchMode::Applied) {
+                    self.reset_sender_search();
+                }
+            }
             (_, KeyCode::Char('v')) => self.toggle_read(),
             (_, KeyCode::Char('m')) => {
                 if self
@@ -619,6 +654,7 @@ impl App {
                 self.search = if query.is_empty() {
                     SearchMode::Off
                 } else {
+                    self.last_search = LastSearch::Subject;
                     SearchMode::Applied
                 };
                 return;
@@ -638,6 +674,50 @@ impl App {
                 tv.set_search(None);
             } else {
                 tv.set_search(Some(input));
+            }
+        }
+    }
+
+    fn reset_sender_search(&mut self) {
+        self.sender_search = SearchMode::Off;
+        if let Some(tv) = self.threads.get_mut(self.current_mb) {
+            tv.set_sender_search(None);
+        }
+    }
+
+    fn handle_sender_search_key(&mut self, key: KeyEvent) {
+        let SearchMode::Typing(ref mut input) = self.sender_search else {
+            return;
+        };
+        match key.code {
+            KeyCode::Char(c) => input.push(c),
+            KeyCode::Backspace => {
+                input.pop();
+            }
+            KeyCode::Enter => {
+                let query = std::mem::take(input);
+                self.sender_search = if query.is_empty() {
+                    SearchMode::Off
+                } else {
+                    self.last_search = LastSearch::Sender;
+                    SearchMode::Applied
+                };
+                return;
+            }
+            KeyCode::Esc => {
+                self.reset_sender_search();
+                return;
+            }
+            _ => return,
+        }
+        let SearchMode::Typing(ref input) = self.sender_search else {
+            return;
+        };
+        if let Some(tv) = self.threads.get_mut(self.current_mb) {
+            if input.is_empty() {
+                tv.set_sender_search(None);
+            } else {
+                tv.set_sender_search(Some(input));
             }
         }
     }
@@ -1245,6 +1325,8 @@ mod tests {
             current_mb: 0,
             pending_sync: None,
             search: SearchMode::Off,
+            sender_search: SearchMode::Off,
+            last_search: LastSearch::Subject,
             move_mode: MoveMode::Off,
             send_mode: SendMode::Off,
             help: None,
@@ -1834,6 +1916,8 @@ mod tests {
             current_mb: 0,
             pending_sync: None,
             search: SearchMode::Off,
+            sender_search: SearchMode::Off,
+            last_search: LastSearch::Subject,
             move_mode: MoveMode::Off,
             send_mode: SendMode::Off,
             help: None,

@@ -245,7 +245,8 @@ impl HelpView {
         thread_keys.extend([
             ("f", "Forward"),
             ("C", "Compose new email"),
-            ("/ / Esc", "Search / clear search"),
+            ("/ / Esc", "Search by subject / clear"),
+            ("\\ / Esc", "Search by sender / clear"),
             ("m / M", "Move email / thread"),
             ("D", "Delete email"),
             ("Enter", "Open email"),

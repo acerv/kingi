@@ -166,6 +166,8 @@ pub fn draw_sidebar(
 fn draw_statusbar(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &App) {
     let widget = if let SearchMode::Typing(input) = &app.search {
         Paragraph::new(format!(" /{input}_")).style(Style::default().fg(Color::Yellow))
+    } else if let SearchMode::Typing(input) = &app.sender_search {
+        Paragraph::new(format!(" \\{input}_")).style(Style::default().fg(Color::Yellow))
     } else if let Some(err) = &app.status_error {
         Paragraph::new(format!(" error: {err}")).style(Style::default().fg(Color::Red))
     } else if app.current_tab == 0 {
@@ -182,14 +184,21 @@ fn draw_statusbar(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: 
                 Style::default().fg(Color::Yellow),
             ));
         }
-        if let Some(tv) = app.threads.get(app.current_mb)
-            && let Some(q) = tv.search()
-        {
-            spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
-            spans.push(Span::styled(
-                format!("search: {q}"),
-                Style::default().fg(Color::Yellow),
-            ));
+        if let Some(tv) = app.threads.get(app.current_mb) {
+            if let Some(q) = tv.search() {
+                spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    format!("search: {q}"),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            if let Some(q) = tv.sender_search() {
+                spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    format!("from: {q}"),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
         }
         Paragraph::new(Line::from(spans))
     } else {

@@ -102,7 +102,8 @@ binary = "gpg2"
 | `1`-`9`, `0`      | Quick reply with template                |
 | `f`               | Forward                                  |
 | `C`               | Compose new email                        |
-| `/` / `Esc`       | Search by subject / clear search         |
+| `/` / `Esc`       | Search by subject / clear                |
+| `\` / `Esc`       | Search by sender / clear                 |
 | `m` / `M`         | Move email / move entire thread          |
 | `D`               | Delete email                             |
 | `Enter`           | Open email (in Drafts: reopen in editor) |
