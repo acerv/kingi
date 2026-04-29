@@ -170,7 +170,7 @@ fn draw_statusbar(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: 
         Paragraph::new(format!(" error: {err}")).style(Style::default().fg(Color::Red))
     } else if app.current_tab == 0 {
         let mut spans = vec![Span::styled(
-            " j/k↑↓ move  J/K mailbox  r reply  R reply+quote  C compose  / search  Q quit",
+            " r reply  R reply+quote  C compose  / search  j/k↑↓ move  ? help  Q quit",
             Style::default().fg(Color::DarkGray),
         )];
         if let Some(md) = app.maildirs.get(app.current_mb)

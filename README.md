@@ -98,23 +98,23 @@ binary = "gpg2"
 
 | Key               | Action                                   |
 | ----------------- | ---------------------------------------- |
-| `j`/`k`/`↑`/`↓`   | Move selection                           |
-| `Ctrl+D`/`Ctrl+U` | Page down / up                           |
-| `g` / `G`         | First / last email                       |
-| `J` / `K`         | Next / previous mailbox                  |
-| `Enter`           | Open email (in Drafts: reopen in editor) |
 | `r` / `R`         | Reply-all / reply-all quoted             |
 | `1`-`9`, `0`      | Quick reply with template                |
 | `f`               | Forward                                  |
 | `C`               | Compose new email                        |
-| `v`               | Toggle read / unread                     |
-| `Ctrl+A`          | Mark all emails as read                  |
-| `Space`           | Toggle flagged                           |
+| `/` / `Esc`       | Search by subject / clear search         |
 | `m` / `M`         | Move email / move entire thread          |
 | `D`               | Delete email                             |
+| `Enter`           | Open email (in Drafts: reopen in editor) |
+| `v`               | Toggle read / unread                     |
+| `Space`           | Toggle flagged                           |
+| `Ctrl+A`          | Mark all emails as read                  |
+| `j`/`k`/`↑`/`↓`   | Move selection                           |
+| `Ctrl+D`/`Ctrl+U` | Page down / up                           |
+| `g` / `G`         | First / last email                       |
+| `J` / `K`         | Next / previous mailbox                  |
 | `s`               | Toggle sort order                        |
 | `N`               | Toggle unread-only filter                |
-| `/` / `Esc`       | Search by subject / clear search         |
 | `Ctrl+S`          | Force sync                               |
 | `?`               | Help                                     |
 | `Q`               | Quit                                     |
@@ -123,16 +123,16 @@ binary = "gpg2"
 
 | Key               | Action                   |
 | ----------------- | ------------------------ |
+| `r` / `R`         | Reply / reply quoted     |
+| `1`-`9`, `0`      | Quick reply with template|
+| `f`               | Forward                  |
+| `Y`               | Copy body to clipboard   |
+| `m` / `M`         | Move email / move thread |
+| `D`               | Delete and close tab     |
 | `j`/`k`/`↑`/`↓`   | Scroll line              |
 | `Ctrl+D`/`Ctrl+U` | Page down / up           |
 | `g` / `G`         | Top / bottom             |
 | `J` / `K`         | Next / previous email    |
-| `Y`               | Copy body to clipboard   |
-| `r` / `R`         | Reply / reply quoted     |
-| `1`-`9`, `0`      | Quick reply with template|
-| `f`               | Forward                  |
-| `m` / `M`         | Move email / move thread |
-| `D`               | Delete and close tab     |
 | `?`               | Help                     |
 | `q`               | Close tab                |
 

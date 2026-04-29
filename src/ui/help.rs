@@ -239,43 +239,43 @@ impl HelpView {
 
     fn sections(&self) -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
         let mut thread_keys: Vec<(&str, &str)> = vec![
-            ("j/k/↑/↓", "Move selection"),
-            ("Ctrl+D/Ctrl+U", "Page down / up"),
-            ("g / G", "First / last email"),
-            ("J / K", "Next / previous mailbox"),
-            ("Enter", "Open email"),
             ("r / R", "Reply / reply quoted"),
         ];
         self.append_quick_reply_keys(&mut thread_keys);
         thread_keys.extend([
             ("f", "Forward"),
             ("C", "Compose new email"),
-            ("v", "Toggle read / unread"),
-            ("Ctrl+A", "Mark all as read"),
-            ("Space", "Toggle flagged"),
+            ("/ / Esc", "Search / clear search"),
             ("m / M", "Move email / thread"),
             ("D", "Delete email"),
+            ("Enter", "Open email"),
+            ("v", "Toggle read / unread"),
+            ("Space", "Toggle flagged"),
+            ("Ctrl+A", "Mark all as read"),
+            ("j/k/↑/↓", "Move selection"),
+            ("Ctrl+D/Ctrl+U", "Page down / up"),
+            ("g / G", "First / last email"),
+            ("J / K", "Next / previous mailbox"),
             ("s", "Toggle sort order"),
             ("V", "Unread-only filter"),
-            ("/ / Esc", "Search / clear search"),
             ("Ctrl+S", "Force sync"),
             ("?", "Help"),
             ("Q", "Quit"),
         ]);
 
         let mut email_keys: Vec<(&str, &str)> = vec![
-            ("j/k/↑/↓", "Scroll line"),
-            ("Ctrl+D/Ctrl+U", "Page down / up"),
-            ("g / G", "Top / bottom"),
-            ("J / K", "Next / previous email"),
-            ("Y", "Copy body to clipboard"),
             ("r / R", "Reply / reply quoted"),
         ];
         self.append_quick_reply_keys(&mut email_keys);
         email_keys.extend([
             ("f", "Forward"),
+            ("Y", "Copy body to clipboard"),
             ("m / M", "Move email / thread"),
             ("D", "Delete and close tab"),
+            ("j/k/↑/↓", "Scroll line"),
+            ("Ctrl+D/Ctrl+U", "Page down / up"),
+            ("g / G", "Top / bottom"),
+            ("J / K", "Next / previous email"),
             ("?", "Help"),
             ("q", "Close tab"),
         ]);
