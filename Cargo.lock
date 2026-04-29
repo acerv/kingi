@@ -1253,6 +1253,7 @@ dependencies = [
  "notify",
  "notify-rust",
  "ratatui",
+ "regex",
  "serde",
  "time",
  "toml",

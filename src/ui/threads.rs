@@ -8,7 +8,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
+use regex::{Regex, RegexBuilder};
 use std::rc::Rc;
+
+const MAX_SEARCH_LEN: usize = 256;
+const REGEX_SIZE_LIMIT: usize = 1 << 16;
 
 struct Row {
     depth: usize,
@@ -23,7 +27,7 @@ pub struct ThreadsView {
     state: ListState,
     rows: Vec<Row>,
     unread_only: bool,
-    search: Option<String>,
+    search: Option<(String, Regex)>,
 }
 
 impl ThreadsView {
@@ -120,10 +124,9 @@ impl ThreadsView {
             self.rows.retain(|r| r.thread.parent.is_unread());
         }
 
-        if let Some(q) = &self.search {
-            let q = q.clone();
+        if let Some((_, ref re)) = self.search {
             self.rows
-                .retain(|r| r.thread.parent.subject.to_lowercase().contains(&q));
+                .retain(|r| re.is_match(&r.thread.parent.subject));
         }
 
         let new_idx = selected_id
@@ -159,13 +162,30 @@ impl ThreadsView {
 
     /// Set or clear the subject search filter and refresh.
     pub fn set_search(&mut self, query: Option<&str>) {
-        self.search = query.map(|q| q.to_lowercase());
+        self.search = query.map(|q| {
+            let q = if q.len() > MAX_SEARCH_LEN {
+                &q[..MAX_SEARCH_LEN]
+            } else {
+                q
+            };
+            let re = RegexBuilder::new(q)
+                .case_insensitive(true)
+                .size_limit(REGEX_SIZE_LIMIT)
+                .build()
+                .unwrap_or_else(|_| {
+                    RegexBuilder::new(&regex::escape(q))
+                        .case_insensitive(true)
+                        .build()
+                        .unwrap()
+                });
+            (q.to_string(), re)
+        });
         self.invalidate();
     }
 
     /// Return the current search query, if any.
     pub fn search(&self) -> Option<&str> {
-        self.search.as_deref()
+        self.search.as_ref().map(|(q, _)| q.as_str())
     }
 
     /// Mark every visible email as read.
@@ -851,6 +871,42 @@ mod tests {
         view.set_search(Some("zzzzz"));
         assert!(view.rows.is_empty());
         assert!(view.selected().is_none());
+    }
+
+    #[test]
+    fn search_regex_matches_pattern() {
+        let mut view = ThreadsView::new(tlist(vec![
+            thread("a", "Alice", "[PATCH v3 2/7] nvme: add test", false),
+            thread("b", "Bob", "[PATCH v2 1/3] nvme: update", false),
+            thread("c", "Carol", "[PATCH v3 1/2] irq: fix bug", false),
+        ]));
+        view.set_search(Some("v3.*nvme"));
+        assert_eq!(view.rows.len(), 1);
+        assert_eq!(view.rows[0].thread.parent.message_id, "a");
+    }
+
+    #[test]
+    fn search_regex_alternation() {
+        let mut view = ThreadsView::new(tlist(vec![
+            thread("a", "Alice", "nvme: add test", false),
+            thread("b", "Bob", "irq: fix bug", false),
+            thread("c", "Carol", "sched: update", false),
+        ]));
+        view.set_search(Some("nvme|irq"));
+        assert_eq!(view.rows.len(), 2);
+        let ids: Vec<_> = view.rows.iter().map(|r| r.thread.parent.message_id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn search_invalid_regex_falls_back_to_literal() {
+        let mut view = ThreadsView::new(tlist(vec![
+            thread("a", "Alice", "[PATCH 1/2] fix", false),
+            thread("b", "Bob", "hello world", false),
+        ]));
+        view.set_search(Some("[PATCH"));
+        assert_eq!(view.rows.len(), 1);
+        assert_eq!(view.rows[0].thread.parent.message_id, "a");
     }
 
     // ── draw ─────────────────────────────────────────────────────────────────
