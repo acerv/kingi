@@ -357,7 +357,13 @@ impl App {
             }
             (_, KeyCode::Enter) => self.open_selected_email(),
             (_, KeyCode::Char('/')) => {
-                self.search = SearchMode::Typing(String::new());
+                let prev = self
+                    .threads
+                    .get(self.current_mb)
+                    .and_then(|tv| tv.search())
+                    .unwrap_or("")
+                    .to_string();
+                self.search = SearchMode::Typing(prev);
             }
             (_, KeyCode::Esc) => self.reset_search(),
             (_, KeyCode::Char('v')) => self.toggle_read(),
@@ -1748,6 +1754,19 @@ mod tests {
         app.handle_key(key(KeyCode::Enter));
         assert!(matches!(app.search, SearchMode::Applied));
         assert_eq!(app.threads[0].search(), Some("t"));
+    }
+
+    #[test]
+    fn search_slash_again_prefills_previous_query() {
+        let mut app = make_app(vec![mb("Inbox", "/inbox")]);
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('h')));
+        app.handle_key(key(KeyCode::Char('i')));
+        app.handle_key(key(KeyCode::Enter));
+        assert!(matches!(app.search, SearchMode::Applied));
+
+        app.handle_key(key(KeyCode::Char('/')));
+        assert!(matches!(app.search, SearchMode::Typing(ref s) if s == "hi"));
     }
 
     #[test]
