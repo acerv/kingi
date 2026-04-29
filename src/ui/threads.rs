@@ -181,6 +181,10 @@ impl ThreadsView {
             (q.to_string(), re)
         });
         self.invalidate();
+        if !self.rows.is_empty() {
+            self.state.select(Some(0));
+        }
+        *self.state.offset_mut() = 0;
     }
 
     /// Return the current search query, if any.
@@ -871,6 +875,39 @@ mod tests {
         view.set_search(Some("zzzzz"));
         assert!(view.rows.is_empty());
         assert!(view.selected().is_none());
+    }
+
+    #[test]
+    fn search_resets_offset_after_scrolling() {
+        let emails: Vec<_> = (0..50)
+            .map(|i| {
+                let id = format!("msg-{i}");
+                let from = format!("user-{i}");
+                let subject = if i % 3 == 0 {
+                    format!("Rust topic {i}")
+                } else {
+                    format!("Other topic {i}")
+                };
+                thread(&id, &from, &subject, false)
+            })
+            .collect();
+        let mut view = ThreadsView::new(tlist(emails));
+
+        // Scroll far down the list
+        view.next_email(45);
+        // Render with a small viewport so offset advances past the top
+        rendered_lines(&mut view, 80, 5);
+        assert!(view.state.offset() > 0, "offset should have advanced");
+
+        view.set_search(Some("rust"));
+        assert_eq!(view.state.selected(), Some(0));
+        assert_eq!(view.state.offset(), 0);
+        // Verify all Rust matches are actually visible from the top
+        let content = rendered_lines(&mut view, 80, 5).join("\n");
+        assert!(
+            content.contains("Rust topic 0"),
+            "first match should be visible after search, got:\n{content}"
+        );
     }
 
     #[test]
