@@ -181,10 +181,15 @@ impl ThreadsView {
             (q.to_string(), re)
         });
         self.invalidate();
-        if !self.rows.is_empty() {
-            self.state.select(Some(0));
+        if query.is_some() {
+            if !self.rows.is_empty() {
+                self.state.select(Some(0));
+            }
+            *self.state.offset_mut() = 0;
+        } else {
+            let idx = self.state.selected().unwrap_or(0);
+            *self.state.offset_mut() = idx.saturating_sub(4);
         }
-        *self.state.offset_mut() = 0;
     }
 
     /// Return the current search query, if any.
