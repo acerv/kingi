@@ -203,8 +203,7 @@ fn decrypt_or_verify(
                 match result {
                     Ok((body, status)) => return (body, status),
                     Err(e) => {
-                        let fallback = msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
-                        return (fallback, CryptoStatus::DecryptFailed(e.to_string()));
+                        return (extract_body(msg), CryptoStatus::DecryptFailed(e.to_string()));
                     }
                 }
             }
@@ -215,8 +214,7 @@ fn decrypt_or_verify(
                 match result {
                     Ok((body, status)) => return (body, status),
                     Err(e) => {
-                        let fallback = msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
-                        return (fallback, CryptoStatus::VerifyFailed(e.to_string()));
+                        return (extract_body(msg), CryptoStatus::VerifyFailed(e.to_string()));
                     }
                 }
             }
@@ -224,7 +222,7 @@ fn decrypt_or_verify(
     }
 
     // 2. Check for inline PGP in the text body.
-    let body = msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
+    let body = extract_body(msg);
 
     if let Some(inline_type) = gpg::detect_inline_pgp(&body) {
         match inline_type {
@@ -251,6 +249,19 @@ fn decrypt_or_verify(
 
     // 3. No PGP content detected.
     (body, CryptoStatus::None)
+}
+
+fn extract_body(msg: &mail_parser::Message) -> String {
+    let has_plain = msg.text_bodies().any(|p| !p.is_text_html());
+    if has_plain {
+        msg.body_text(0)
+            .map(|t| t.into_owned())
+            .unwrap_or_default()
+    } else if let Some(html) = msg.body_html(0) {
+        html2text::from_read(html.as_bytes(), 80).unwrap_or_default()
+    } else {
+        String::new()
+    }
 }
 
 /// Build a status line for the crypto status, if any.
@@ -799,5 +810,64 @@ mod tests {
         let lines = highlight_body(body);
         assert_eq!(line_fg(&lines[0]), Some(Color::Blue), "> quote");
         assert_eq!(line_fg(&lines[1]), None, "- outside diff");
+    }
+
+    // ── extract_body ────────────────────────────────────────────────────────
+
+    fn parse_msg(raw: &str) -> mail_parser::Message<'_> {
+        mail_parser::MessageParser::default()
+            .parse(raw.as_bytes())
+            .unwrap()
+    }
+
+    #[test]
+    fn extract_body_plain_text() {
+        let raw = concat!(
+            "From: a@x.com\r\n",
+            "To: b@x.com\r\n",
+            "Content-Type: text/plain\r\n",
+            "\r\n",
+            "Hello plain",
+        );
+        let msg = parse_msg(raw);
+        let body = extract_body(&msg);
+        assert!(body.contains("Hello plain"), "got: {body}");
+    }
+
+    #[test]
+    fn extract_body_html_shows_links() {
+        let raw = concat!(
+            "From: a@x.com\r\n",
+            "To: b@x.com\r\n",
+            "Content-Type: text/html\r\n",
+            "\r\n",
+            "<p>Click <a href=\"https://example.com\">here</a></p>",
+        );
+        let msg = parse_msg(raw);
+        let body = extract_body(&msg);
+        assert!(body.contains("[1]: https://example.com"), "got: {body}");
+    }
+
+    #[test]
+    fn extract_body_prefers_plain_over_html() {
+        let raw = concat!(
+            "From: a@x.com\r\n",
+            "To: b@x.com\r\n",
+            "MIME-Version: 1.0\r\n",
+            "Content-Type: multipart/alternative; boundary=\"bnd\"\r\n",
+            "\r\n",
+            "--bnd\r\n",
+            "Content-Type: text/plain\r\n",
+            "\r\n",
+            "Plain version\r\n",
+            "--bnd\r\n",
+            "Content-Type: text/html\r\n",
+            "\r\n",
+            "<p>HTML <a href=\"https://example.com\">link</a></p>\r\n",
+            "--bnd--",
+        );
+        let msg = parse_msg(raw);
+        let body = extract_body(&msg);
+        assert!(body.contains("Plain version"), "got: {body}");
     }
 }
