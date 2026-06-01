@@ -620,13 +620,14 @@ impl App {
             (_, KeyCode::Char(c @ '0'..='9')) => self.open_quick_reply_from_tab(c),
             (_, KeyCode::Char('?')) => self.help = Some(HelpView::new()),
             (_, KeyCode::Char('Y')) => {
-                if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
-                    let raw = ev.raw_body();
-                    if let Some(ref mut cb) = self.clipboard
-                        && let Err(e) = cb.set_text(raw)
-                    {
-                        self.status_error = Some(e.to_string());
-                    }
+                let raw = match self.tabs.get(ei) {
+                    Some(Tab::Email(ev)) => Some(ev.raw_body().to_string()),
+                    _ => None,
+                };
+                if let Some(raw) = raw
+                    && let Err(e) = self.copy_to_clipboard(&raw)
+                {
+                    self.status_error = Some(format!("clipboard: {e}"));
                 }
             }
             _ => {}
@@ -1225,6 +1226,75 @@ impl App {
 
         let _ = self.maildirs[target_mb_idx].sync();
         self.threads[target_mb_idx].invalidate();
+    }
+
+    /// Copy `text` to the system clipboard.
+    ///
+    /// Native clipboard utilities (`wl-copy`, `xclip`, `xsel`) are tried first
+    /// because they fork a helper that keeps serving the selection after the
+    /// key press, which is far more reliable than `arboard` on Wayland where the
+    /// selection is otherwise dropped as soon as ownership changes. `arboard` is
+    /// kept as a last-resort fallback.
+    fn copy_to_clipboard(&mut self, text: &str) -> anyhow::Result<()> {
+        if copy_via_cli(text) {
+            return Ok(());
+        }
+        if let Some(ref mut cb) = self.clipboard {
+            cb.set_text(text)?;
+            return Ok(());
+        }
+        anyhow::bail!("no clipboard backend available (install wl-clipboard or xclip)")
+    }
+}
+
+/// Try the available native clipboard utilities in turn, returning `true` on the
+/// first one that accepts the text.
+fn copy_via_cli(text: &str) -> bool {
+    // Prefer the backend matching the active session, then fall back to the
+    // others so it still works under XWayland or a plain X11 session.
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let candidates: &[(&str, &[&str])] = if wayland {
+        &[
+            ("wl-copy", &[]),
+            ("xclip", &["-selection", "clipboard"]),
+            ("xsel", &["-i", "-b"]),
+        ]
+    } else {
+        &[
+            ("xclip", &["-selection", "clipboard"]),
+            ("xsel", &["-i", "-b"]),
+            ("wl-copy", &[]),
+        ]
+    };
+    candidates
+        .iter()
+        .any(|(cmd, args)| spawn_copy(cmd, args, text).is_ok())
+}
+
+/// Spawn a clipboard utility and feed `text` to its stdin.
+fn spawn_copy(cmd: &str, args: &[&str], text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    // Closing stdin (dropped at end of this block) signals end of input. These
+    // tools fork a background helper and the foreground process then exits, so
+    // waiting on it returns promptly and reaps it.
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| std::io::Error::other("no stdin"))?
+        .write_all(text.as_bytes())?;
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("clipboard utility failed"))
     }
 }
 
