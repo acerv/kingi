@@ -330,9 +330,9 @@ fn build_row_item(row: &Row, subject_w: usize) -> ListItem<'static> {
     } else if e.has_mark(Flag::Flagged) {
         text_style = text_style.fg(Color::Red);
     } else if row.superseded {
-        text_style = text_style.fg(Color::DarkGray);
+        text_style = text_style.fg(Color::Rgb(86, 95, 137));
     } else if row.status == crate::ui::markers::PatchStatus::Merged {
-        text_style = text_style.fg(Color::DarkGray);
+        text_style = text_style.fg(Color::Rgb(86, 95, 137));
     } else if row.status == crate::ui::markers::PatchStatus::Reviewed {
         text_style = text_style.fg(Color::Yellow);
     }
