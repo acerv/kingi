@@ -44,6 +44,7 @@ password = "app-password"
 [[mailbox]]
 label = "INBOX"
 path  = "/home/you/Mail/INBOX/"
+markers = true  # Enables patch status tracking (merged, reviewed, superseded)
 
 # "Drafts" and "Trash" labels are treated specially.
 # If omitted, defaults are created under ~/.config/kingi/.
@@ -59,6 +60,22 @@ path  = "/home/you/Mail/Trash/"
 [sync]
 command  = "mbsync -a"
 interval = 60
+
+# Optional: Case-insensitive regular expressions that mark a patch as merged.
+# If omitted, kingi uses the default lore-cli regexes.
+[status]
+merged_markers = [
+    # Line begins with the action verb, followed by "thanks", a target tree
+    # ("to <tree>"), or end-of-statement — e.g. "Applied, thanks",
+    # "Merged.", "Pushed to for-next".
+    "^\\s*(applied|merged|pushed)(,?\\s+thanks|\\s+to\\s+\\S+|[.!]|\\s*$)",
+    # "thanks, applied" / "thanks merged".
+    "^\\s*thanks,?\\s+(applied|merged|pushed)\\b",
+    # "patchset applied", "series merged" as a line-leading statement.
+    "^\\s*(patch(set|es)?|series)\\s+(applied|merged)(,?\\s+thanks|\\s+to\\s+\\S+|[.!]?\\s*$)",
+    # "Thanks ... merged" / "Thanks ... pushed"
+    "^\\s*(T|t)hanks.*(merged|applied|pushed)",
+]
 ```
 
 A plain-text `~/.config/kingi/signature` file, if present, is appended to every draft.
@@ -123,22 +140,22 @@ binary = "gpg2"
 
 ### Email tab
 
-| Key               | Action                   |
-| ----------------- | ------------------------ |
-| `r` / `R`         | Reply / reply quoted     |
-| `1`-`9`, `0`      | Quick reply with template|
-| `f`               | Forward                  |
-| `Y`               | Copy body to clipboard   |
-| `m` / `M`         | Move email / move thread |
-| `Ctrl+f`          | Toggle flagged           |
-| `Ctrl+x`          | Toggle merged            |
-| `D`               | Delete and close tab     |
-| `j`/`k`/`↑`/`↓`   | Scroll line              |
-| `Ctrl+D`/`Ctrl+U` | Page down / up           |
-| `g` / `G`         | Top / bottom             |
-| `J` / `K`         | Next / previous email    |
-| `?`               | Help                     |
-| `q`               | Close tab                |
+| Key               | Action                    |
+| ----------------- | ------------------------- |
+| `r` / `R`         | Reply / reply quoted      |
+| `1`-`9`, `0`      | Quick reply with template |
+| `f`               | Forward                   |
+| `Y`               | Copy body to clipboard    |
+| `m` / `M`         | Move email / move thread  |
+| `Ctrl+f`          | Toggle flagged            |
+| `Ctrl+x`          | Toggle merged             |
+| `D`               | Delete and close tab      |
+| `j`/`k`/`↑`/`↓`   | Scroll line               |
+| `Ctrl+D`/`Ctrl+U` | Page down / up            |
+| `g` / `G`         | Top / bottom              |
+| `J` / `K`         | Next / previous email     |
+| `?`               | Help                      |
+| `q`               | Close tab                 |
 
 ### Compose
 
