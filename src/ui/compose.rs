@@ -563,7 +563,9 @@ mod tests {
         let content = "Message-ID: <id@test>\r\nFrom: alice@x.com\r\nTo: me@x.com\r\nSubject: Hi\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\nBody\r\n";
         let path = write_tmp_email(content);
         let email = crate::core::thread::Email::from_file(&path).unwrap();
-        let draft = email.quick_reply_draft("Thanks for the patch!", "me@x.com").unwrap();
+        let draft = email
+            .quick_reply_draft("Thanks for the patch!", "me@x.com")
+            .unwrap();
         assert!(
             draft.contains("Thanks for the patch!"),
             "draft must contain template body: {draft}"
@@ -628,7 +630,9 @@ mod tests {
         let content = "Message-ID: <id@test>\r\nFrom: alice@x.com\r\nTo: me@x.com\r\nSubject: Hi\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\nBody\r\n";
         let path = write_tmp_email(content);
         let email = crate::core::thread::Email::from_file(&path).unwrap();
-        let draft = email.quick_reply_draft("No trailing newline", "me@x.com").unwrap();
+        let draft = email
+            .quick_reply_draft("No trailing newline", "me@x.com")
+            .unwrap();
         let body_start = draft.find(BODY_SENTINEL).unwrap() + BODY_SENTINEL.len() + 1;
         let body = &draft[body_start..];
         assert!(

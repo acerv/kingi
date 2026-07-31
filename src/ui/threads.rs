@@ -17,6 +17,7 @@ const REGEX_SIZE_LIMIT: usize = 1 << 16;
 struct Row {
     depth: usize,
     thread: Rc<EmailThread>,
+    status: crate::ui::markers::PatchStatus,
 }
 
 /// Scrollable thread list sharing the same `ThreadList` as the `Maildir`.
@@ -29,16 +30,40 @@ pub struct ThreadsView {
     unread_only: bool,
     search: Option<(String, Regex)>,
     sender_search: Option<(String, Regex)>,
+    markers: bool,
+    markers_cache: Rc<std::cell::RefCell<crate::ui::markers::MarkersCache>>,
 }
 
 impl ThreadsView {
     fn flatten(&mut self) {
         self.rows.clear();
-        flatten_recursive(&self.threads.borrow(), 0, &mut self.rows);
+        flatten_recursive(
+            &self.threads.borrow(),
+            0,
+            &mut self.rows,
+            self.markers,
+            &mut self.markers_cache.borrow_mut(),
+            None,
+        );
     }
 
     /// Build the view from a shared `ThreadList`.
+    #[cfg(test)]
     pub fn new(threads: EmailThreadList) -> Self {
+        Self::with_markers(
+            threads,
+            false,
+            Rc::new(std::cell::RefCell::new(
+                crate::ui::markers::MarkersCache::new(Vec::new()),
+            )),
+        )
+    }
+
+    pub fn with_markers(
+        threads: EmailThreadList,
+        markers: bool,
+        markers_cache: Rc<std::cell::RefCell<crate::ui::markers::MarkersCache>>,
+    ) -> Self {
         let mut view = Self {
             threads,
             state: ListState::default(),
@@ -46,6 +71,8 @@ impl ThreadsView {
             unread_only: false,
             search: None,
             sender_search: None,
+            markers,
+            markers_cache,
         };
         view.flatten();
         if !view.rows.is_empty() {
@@ -127,8 +154,7 @@ impl ThreadsView {
         }
 
         if let Some((_, ref re)) = self.search {
-            self.rows
-                .retain(|r| re.is_match(&r.thread.parent.subject));
+            self.rows.retain(|r| re.is_match(&r.thread.parent.subject));
         }
 
         if let Some((_, ref re)) = self.sender_search {
@@ -270,13 +296,18 @@ fn build_row_item(row: &Row, subject_w: usize) -> ListItem<'static> {
     };
     let subject_avail = subject_w.saturating_sub(indent.chars().count());
     let subject_padded = utils::fit_string(&subject, subject_avail);
-    let text_style = if e.is_unread() {
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
+    let mut text_style = Style::default();
+    
+    if e.is_unread() {
+        text_style = text_style.fg(Color::Green).add_modifier(Modifier::BOLD);
+    } else if e.has_mark(Flag::Flagged) {
+        text_style = text_style.fg(Color::Red);
+    } else if row.status == crate::ui::markers::PatchStatus::Merged {
+        text_style = text_style.fg(Color::DarkGray);
+    } else if row.status == crate::ui::markers::PatchStatus::Reviewed {
+        text_style = text_style.fg(Color::Yellow);
+    }
+
     let flagged_span = if e.has_mark(Flag::Flagged) {
         Span::styled("★", Style::default().fg(Color::Yellow))
     } else {
@@ -365,14 +396,48 @@ pub fn draw(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, view: &mut 
     frame.render_stateful_widget(widget, area, &mut visible_state);
 }
 
-fn flatten_recursive(threads: &[Rc<EmailThread>], depth: usize, out: &mut Vec<Row>) {
+fn compute_thread_status(
+    thread: &Rc<EmailThread>,
+    cache: &mut crate::ui::markers::MarkersCache,
+) -> crate::ui::markers::PatchStatus {
+    let mut current_status = cache.get_status(&thread.parent);
+
+    if current_status == crate::ui::markers::PatchStatus::Merged {
+        return crate::ui::markers::PatchStatus::Merged;
+    }
+
+    for reply in thread.replies.borrow().iter() {
+        let reply_status = compute_thread_status(reply, cache);
+        if reply_status == crate::ui::markers::PatchStatus::Merged {
+            return crate::ui::markers::PatchStatus::Merged;
+        }
+        if reply_status == crate::ui::markers::PatchStatus::Reviewed {
+            current_status = crate::ui::markers::PatchStatus::Reviewed;
+        }
+    }
+    current_status
+}
+
+fn flatten_recursive(
+    threads: &[Rc<EmailThread>],
+    depth: usize,
+    out: &mut Vec<Row>,
+    markers: bool,
+    cache: &mut crate::ui::markers::MarkersCache,
+    inherited_status: Option<crate::ui::markers::PatchStatus>,
+) {
     for thread in threads {
+        let mut status = inherited_status.unwrap_or(crate::ui::markers::PatchStatus::Normal);
+        if markers && inherited_status.is_none() {
+            status = compute_thread_status(thread, cache);
+        }
         out.push(Row {
             depth,
             thread: thread.clone(),
+            status,
         });
         let replies = thread.replies.borrow();
-        flatten_recursive(&replies, depth + 1, out);
+        flatten_recursive(&replies, depth + 1, out, markers, cache, Some(status));
     }
 }
 
@@ -980,7 +1045,11 @@ mod tests {
         ]));
         view.set_search(Some("nvme|irq"));
         assert_eq!(view.rows.len(), 2);
-        let ids: Vec<_> = view.rows.iter().map(|r| r.thread.parent.message_id.as_str()).collect();
+        let ids: Vec<_> = view
+            .rows
+            .iter()
+            .map(|r| r.thread.parent.message_id.as_str())
+            .collect();
         assert_eq!(ids, ["a", "b"]);
     }
 

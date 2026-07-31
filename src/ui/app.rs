@@ -98,12 +98,49 @@ impl App {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
+        let config_path = config::config_dir().join("config.toml");
+        let raw_config = std::fs::read_to_string(&config_path).unwrap_or_default();
+        let parsed_toml: toml::Value =
+            toml::from_str(&raw_config).unwrap_or(toml::Value::Table(Default::default()));
+        let mut markers_flags = Vec::new();
+        if let Some(mailboxes) = parsed_toml.get("mailbox").and_then(|v| v.as_array()) {
+            for mb in mailboxes {
+                markers_flags.push(mb.get("markers").and_then(|v| v.as_bool()).unwrap_or(false));
+            }
+        }
+        while markers_flags.len() < config.mailboxes.len() {
+            markers_flags.push(false);
+        }
+
+        let mut custom_markers = Vec::new();
+        if let Some(status_cfg) = parsed_toml.get("status") {
+            if let Some(markers) = status_cfg.get("merged_markers") {
+                if let Some(arr) = markers.as_array() {
+                    for v in arr {
+                        if let Some(s) = v.as_str() {
+                            custom_markers.push(s.to_string());
+                        }
+                    }
+                } else if let Some(s) = markers.as_str() {
+                    custom_markers.push(s.to_string());
+                }
+            }
+        }
+
+        let markers_cache = std::rc::Rc::new(std::cell::RefCell::new(
+            crate::ui::markers::MarkersCache::new(custom_markers),
+        ));
+
         let total = config.mailboxes.len();
         for (i, mb) in config.mailboxes.iter().enumerate() {
             let label = mb.label.as_str();
             terminal.draw(|frame| draw::draw_startup(frame, label, i, total))?;
             let maildir = Maildir::new(&mb.path).unwrap_or_default();
-            let tv = ThreadsView::new(maildir.threads());
+            let tv = ThreadsView::with_markers(
+                maildir.threads(),
+                markers_flags[i],
+                markers_cache.clone(),
+            );
             maildirs.push(maildir);
             threads.push(tv);
         }

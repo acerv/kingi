@@ -76,9 +76,7 @@ impl HelpView {
             }
             (_, KeyCode::Char('g')) => self.scroll = 0,
             (_, KeyCode::Char('G')) => {
-                self.scroll = self
-                    .total_lines
-                    .saturating_sub(self.visible_height);
+                self.scroll = self.total_lines.saturating_sub(self.visible_height);
             }
             (_, KeyCode::Char('/')) => {
                 self.searching = true;
@@ -238,9 +236,7 @@ impl HelpView {
     }
 
     fn sections(&self) -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
-        let mut thread_keys: Vec<(&str, &str)> = vec![
-            ("r / R", "Reply / reply quoted"),
-        ];
+        let mut thread_keys: Vec<(&str, &str)> = vec![("r / R", "Reply / reply quoted")];
         self.append_quick_reply_keys(&mut thread_keys);
         thread_keys.extend([
             ("f", "Forward"),
@@ -264,9 +260,7 @@ impl HelpView {
             ("Q", "Quit"),
         ]);
 
-        let mut email_keys: Vec<(&str, &str)> = vec![
-            ("r / R", "Reply / reply quoted"),
-        ];
+        let mut email_keys: Vec<(&str, &str)> = vec![("r / R", "Reply / reply quoted")];
         self.append_quick_reply_keys(&mut email_keys);
         email_keys.extend([
             ("f", "Forward"),
@@ -288,10 +282,7 @@ impl HelpView {
             ("Esc", "Back to editor"),
         ];
 
-        let global_keys = vec![
-            ("Ctrl+N/Ctrl+P", "Next / previous tab"),
-            ("?", "Help"),
-        ];
+        let global_keys = vec![("Ctrl+N/Ctrl+P", "Next / previous tab"), ("?", "Help")];
 
         vec![
             ("Thread list", thread_keys),
@@ -468,7 +459,10 @@ mod tests {
         assert!(hv.searching);
         let text = lines_text(&hv);
         assert!(text.contains("Quit"), "Quit should match: {text}");
-        assert!(!text.contains("Forward"), "Forward should be filtered: {text}");
+        assert!(
+            !text.contains("Forward"),
+            "Forward should be filtered: {text}"
+        );
     }
 
     #[test]
@@ -527,10 +521,7 @@ mod tests {
     fn keys_during_search_do_not_close() {
         let mut hv = HelpView::new();
         hv.on_key(key(KeyCode::Char('/')));
-        assert_eq!(
-            hv.on_key(key(KeyCode::Char('q'))),
-            HelpAction::Continue
-        );
+        assert_eq!(hv.on_key(key(KeyCode::Char('q'))), HelpAction::Continue);
         assert!(hv.searching);
     }
 

@@ -203,7 +203,10 @@ fn decrypt_or_verify(
                 match result {
                     Ok((body, status)) => return (body, status),
                     Err(e) => {
-                        return (extract_body(msg), CryptoStatus::DecryptFailed(e.to_string()));
+                        return (
+                            extract_body(msg),
+                            CryptoStatus::DecryptFailed(e.to_string()),
+                        );
                     }
                 }
             }
@@ -254,9 +257,7 @@ fn decrypt_or_verify(
 fn extract_body(msg: &mail_parser::Message) -> String {
     let has_plain = msg.text_bodies().any(|p| !p.is_text_html());
     if has_plain {
-        msg.body_text(0)
-            .map(|t| t.into_owned())
-            .unwrap_or_default()
+        msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default()
     } else if let Some(html) = msg.body_html(0) {
         html2text::from_read(html.as_bytes(), 80).unwrap_or_default()
     } else {

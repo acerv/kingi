@@ -459,14 +459,8 @@ password = "pass"
         fs::write(kingi_dir.join("reply-3"), "Template three").unwrap();
         fs::write(kingi_dir.join("reply-0"), "Template zero").unwrap();
         with_xdg(&dir, || {
-            assert_eq!(
-                load_reply_template(3),
-                Some("Template three".to_string())
-            );
-            assert_eq!(
-                load_reply_template(0),
-                Some("Template zero".to_string())
-            );
+            assert_eq!(load_reply_template(3), Some("Template three".to_string()));
+            assert_eq!(load_reply_template(0), Some("Template zero".to_string()));
             assert!(load_reply_template(5).is_none());
         });
     }

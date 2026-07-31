@@ -7,6 +7,7 @@ pub mod draw;
 pub mod editor;
 pub mod email;
 pub mod help;
+pub mod markers;
 pub mod send;
 pub mod threads;
 pub mod utils;
