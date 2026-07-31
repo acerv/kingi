@@ -18,6 +18,7 @@ struct Row {
     depth: usize,
     thread: Rc<EmailThread>,
     status: crate::ui::markers::PatchStatus,
+    superseded: bool,
 }
 
 /// Scrollable thread list sharing the same `ThreadList` as the `Maildir`.
@@ -37,6 +38,10 @@ pub struct ThreadsView {
 impl ThreadsView {
     fn flatten(&mut self) {
         self.rows.clear();
+        let mut max_versions = std::collections::HashMap::new();
+        compute_max_versions(&self.threads.borrow(), &mut max_versions);
+        let mut max_descendants = std::collections::HashMap::new();
+        compute_max_descendant_versions(&self.threads.borrow(), &mut max_descendants);
         flatten_recursive(
             &self.threads.borrow(),
             0,
@@ -44,6 +49,8 @@ impl ThreadsView {
             self.markers,
             &mut self.markers_cache.borrow_mut(),
             None,
+            &max_versions,
+            &max_descendants,
         );
     }
 
@@ -322,6 +329,8 @@ fn build_row_item(row: &Row, subject_w: usize) -> ListItem<'static> {
         text_style = text_style.fg(Color::Green).add_modifier(Modifier::BOLD);
     } else if e.has_mark(Flag::Flagged) {
         text_style = text_style.fg(Color::Red);
+    } else if row.superseded {
+        text_style = text_style.fg(Color::DarkGray);
     } else if row.status == crate::ui::markers::PatchStatus::Merged {
         text_style = text_style.fg(Color::DarkGray);
     } else if row.status == crate::ui::markers::PatchStatus::Reviewed {
@@ -416,6 +425,87 @@ pub fn draw(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, view: &mut 
     frame.render_stateful_widget(widget, area, &mut visible_state);
 }
 
+pub(crate) fn version_of(subject: &str) -> (u32, String) {
+    let mut rest = subject.trim();
+    let mut version = 1;
+    let mut found = false;
+    while let Some(inner) = rest.strip_prefix('[') {
+        let Some(close) = inner.find(']') else {
+            break;
+        };
+        if !found {
+            if let Some(v) = inner[..close]
+                .split(|c: char| c.is_whitespace() || c == ',')
+                .find_map(|t| {
+                    let digits = t.strip_prefix('v').or_else(|| t.strip_prefix('V'))?;
+                    digits.parse::<u32>().ok()
+                })
+            {
+                version = v;
+                found = true;
+            }
+        }
+        rest = inner[close + 1..].trim_start();
+    }
+    let title = rest.trim();
+    let key = if title.is_empty() {
+        subject.trim()
+    } else {
+        title
+    };
+    (
+        version,
+        key.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase(),
+    )
+}
+
+fn compute_max_versions(
+    threads: &[Rc<EmailThread>],
+    max_versions: &mut std::collections::HashMap<String, u32>,
+) {
+    for thread in threads {
+        let (ver, key) = version_of(&thread.parent.subject);
+        let entry = max_versions.entry(key).or_insert(0);
+        if ver > *entry {
+            *entry = ver;
+        }
+        compute_max_versions(&thread.replies.borrow(), max_versions);
+    }
+}
+
+fn compute_max_descendant_versions(
+    threads: &[Rc<EmailThread>],
+    max_descendants: &mut std::collections::HashMap<String, u32>,
+) {
+    for thread in threads {
+        compute_max_descendant_version_recursive(thread, max_descendants);
+    }
+}
+
+fn compute_max_descendant_version_recursive(
+    thread: &Rc<EmailThread>,
+    max_descendants: &mut std::collections::HashMap<String, u32>,
+) -> u32 {
+    let mut max_ver = 0;
+    let subject = thread.parent.subject.trim_start();
+    if subject.starts_with('[') {
+        let (ver, _) = version_of(subject);
+        max_ver = ver;
+    }
+
+    for reply in thread.replies.borrow().iter() {
+        let child_max = compute_max_descendant_version_recursive(reply, max_descendants);
+        if child_max > max_ver {
+            max_ver = child_max;
+        }
+    }
+    max_descendants.insert(thread.parent.message_id.clone(), max_ver);
+    max_ver
+}
+
 fn compute_thread_status(
     thread: &Rc<EmailThread>,
     cache: &mut crate::ui::markers::MarkersCache,
@@ -445,19 +535,38 @@ fn flatten_recursive(
     markers: bool,
     cache: &mut crate::ui::markers::MarkersCache,
     inherited_status: Option<crate::ui::markers::PatchStatus>,
+    max_versions: &std::collections::HashMap<String, u32>,
+    max_descendants: &std::collections::HashMap<String, u32>,
 ) {
     for thread in threads {
         let mut status = inherited_status.unwrap_or(crate::ui::markers::PatchStatus::Normal);
         if markers && inherited_status.is_none() {
             status = compute_thread_status(thread, cache);
         }
+        let (ver, key) = version_of(&thread.parent.subject);
+        let superseded_by_key = max_versions.get(&key).map(|&m| ver < m).unwrap_or(false);
+        let superseded_by_descendant = max_descendants
+            .get(&thread.parent.message_id)
+            .map(|&m| ver > 0 && ver < m)
+            .unwrap_or(false);
+        let superseded = superseded_by_key || superseded_by_descendant;
         out.push(Row {
             depth,
             thread: thread.clone(),
             status,
+            superseded,
         });
         let replies = thread.replies.borrow();
-        flatten_recursive(&replies, depth + 1, out, markers, cache, Some(status));
+        flatten_recursive(
+            &replies,
+            depth + 1,
+            out,
+            markers,
+            cache,
+            Some(status),
+            max_versions,
+            max_descendants,
+        );
     }
 }
 
