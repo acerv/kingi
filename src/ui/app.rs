@@ -358,7 +358,12 @@ impl App {
                     tv.mark_all_read();
                 }
             }
-            (_, KeyCode::Char(' ')) => self.toggle_flagged_thread(),
+            (KeyModifiers::CONTROL, KeyCode::Char('f')) => self.toggle_flagged_thread(),
+            (KeyModifiers::CONTROL, KeyCode::Char('x')) => {
+                if let Some(tv) = self.threads.get_mut(self.current_mb) {
+                    tv.toggle_merged();
+                }
+            }
             (_, KeyCode::Char('D')) => self.delete_selected_thread(),
             (_, KeyCode::Char('V')) => {
                 if let Some(tv) = self.threads.get_mut(self.current_mb) {
@@ -646,6 +651,12 @@ impl App {
             (_, KeyCode::Char('G')) => {
                 if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
                     ev.last_line();
+                }
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('f')) => self.toggle_flagged_thread(),
+            (KeyModifiers::CONTROL, KeyCode::Char('x')) => {
+                if let Some(tv) = self.threads.get_mut(self.current_mb) {
+                    tv.toggle_merged();
                 }
             }
             (_, KeyCode::Char('m')) => self.activate_move_mode(false),

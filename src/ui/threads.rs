@@ -275,6 +275,26 @@ impl ThreadsView {
             }
         }
     }
+
+    /// Toggle merged status for the currently selected root thread.
+    pub fn toggle_merged(&mut self) {
+        let Some(root) = self.selected_root() else {
+            return;
+        };
+
+        let mut cache = self.markers_cache.borrow_mut();
+        let current_status = cache.get_status(&root.parent);
+
+        let new_status = if current_status == crate::ui::markers::PatchStatus::Merged {
+            crate::ui::markers::PatchStatus::Normal
+        } else {
+            crate::ui::markers::PatchStatus::Merged
+        };
+
+        cache.set_status(&root.parent, new_status);
+        drop(cache);
+        self.invalidate();
+    }
 }
 
 /// Build a single `ListItem` for a thread row.
@@ -297,7 +317,7 @@ fn build_row_item(row: &Row, subject_w: usize) -> ListItem<'static> {
     let subject_avail = subject_w.saturating_sub(indent.chars().count());
     let subject_padded = utils::fit_string(&subject, subject_avail);
     let mut text_style = Style::default();
-    
+
     if e.is_unread() {
         text_style = text_style.fg(Color::Green).add_modifier(Modifier::BOLD);
     } else if e.has_mark(Flag::Flagged) {

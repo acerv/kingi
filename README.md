@@ -108,7 +108,8 @@ binary = "gpg2"
 | `D`               | Delete email                             |
 | `Enter`           | Open email (in Drafts: reopen in editor) |
 | `v`               | Toggle read / unread                     |
-| `Space`           | Toggle flagged                           |
+| `Ctrl+f`          | Toggle flagged                           |
+| `Ctrl+x`          | Toggle merged                            |
 | `Ctrl+A`          | Mark all emails as read                  |
 | `j`/`k`/`↑`/`↓`   | Move selection                           |
 | `Ctrl+D`/`Ctrl+U` | Page down / up                           |
@@ -129,6 +130,8 @@ binary = "gpg2"
 | `f`               | Forward                  |
 | `Y`               | Copy body to clipboard   |
 | `m` / `M`         | Move email / move thread |
+| `Ctrl+f`          | Toggle flagged           |
+| `Ctrl+x`          | Toggle merged            |
 | `D`               | Delete and close tab     |
 | `j`/`k`/`↑`/`↓`   | Scroll line              |
 | `Ctrl+D`/`Ctrl+U` | Page down / up           |

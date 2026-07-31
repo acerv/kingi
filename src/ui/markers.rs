@@ -96,6 +96,11 @@ impl MarkersCache {
         status
     }
 
+    pub fn set_status(&mut self, email: &Email, status: PatchStatus) {
+        self.cache.insert(email.message_id.clone(), status);
+        self.dirty = true;
+    }
+
     fn compute_email_status(&self, email: &Email) -> PatchStatus {
         let msg = match email.to_message() {
             Ok(m) => m,
