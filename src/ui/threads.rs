@@ -49,6 +49,7 @@ impl ThreadsView {
             self.markers,
             &mut self.markers_cache.borrow_mut(),
             None,
+            false,
             &max_versions,
             &max_descendants,
         );
@@ -462,6 +463,22 @@ pub(crate) fn version_of(subject: &str) -> (u32, String) {
     )
 }
 
+fn is_patch_submission(subject: &str) -> bool {
+    let s = subject.trim_start().to_lowercase();
+    if s.starts_with("re:") {
+        return false;
+    }
+    if s.starts_with('[') {
+        if let Some(close) = s.find(']') {
+            let after = s[close + 1..].trim_start();
+            if after.starts_with("re:") {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn compute_max_versions(
     threads: &[Rc<EmailThread>],
     max_versions: &mut std::collections::HashMap<String, u32>,
@@ -535,21 +552,37 @@ fn flatten_recursive(
     markers: bool,
     cache: &mut crate::ui::markers::MarkersCache,
     inherited_status: Option<crate::ui::markers::PatchStatus>,
+    inherited_superseded: bool,
     max_versions: &std::collections::HashMap<String, u32>,
     max_descendants: &std::collections::HashMap<String, u32>,
 ) {
     for thread in threads {
-        let mut status = inherited_status.unwrap_or(crate::ui::markers::PatchStatus::Normal);
-        if markers && inherited_status.is_none() {
+        let is_patch = is_patch_submission(&thread.parent.subject);
+
+        let mut status = if is_patch {
+            crate::ui::markers::PatchStatus::Normal
+        } else {
+            inherited_status.unwrap_or(crate::ui::markers::PatchStatus::Normal)
+        };
+
+        if markers && (is_patch || inherited_status.is_none()) {
             status = compute_thread_status(thread, cache);
         }
+
         let (ver, key) = version_of(&thread.parent.subject);
         let superseded_by_key = max_versions.get(&key).map(|&m| ver < m).unwrap_or(false);
         let superseded_by_descendant = max_descendants
             .get(&thread.parent.message_id)
             .map(|&m| ver > 0 && ver < m)
             .unwrap_or(false);
-        let superseded = superseded_by_key || superseded_by_descendant;
+
+        let inherited_sup = if is_patch {
+            false
+        } else {
+            inherited_superseded
+        };
+        let superseded = inherited_sup || superseded_by_key || superseded_by_descendant;
+
         out.push(Row {
             depth,
             thread: thread.clone(),
@@ -564,6 +597,7 @@ fn flatten_recursive(
             markers,
             cache,
             Some(status),
+            superseded,
             max_versions,
             max_descendants,
         );

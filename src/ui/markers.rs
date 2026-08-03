@@ -63,16 +63,20 @@ impl MarkersCache {
                 Regex::new(r"(?i)\b(applied|merged|pushed)(,?\s+thanks|\s+to\s+\S+|[.!]|\s*$)")
                     .unwrap(),
             );
-            merged_regexes
-                .push(Regex::new(r"(?i)\bthanks,?\s+(applied|merged|pushed)\b").unwrap());
+            merged_regexes.push(Regex::new(r"(?i)\bthanks,?\s+(applied|merged|pushed)\b").unwrap());
             merged_regexes.push(Regex::new(r"(?i)\b(patch(set|es)?|series)\s+(applied|merged)(,?\s+thanks|\s+to\s+\S+|[.!]?\s*$)").unwrap());
-            merged_regexes
-                .push(Regex::new(r"(?i)\b(T|t)hanks.*(merged|applied|pushed)").unwrap());
+            merged_regexes.push(Regex::new(r"(?i)\b(T|t)hanks.*(merged|applied|pushed)").unwrap());
         } else {
             for marker in custom_markers {
-                if let Ok(re) = regex::RegexBuilder::new(&marker).case_insensitive(true).build() {
+                if let Ok(re) = regex::RegexBuilder::new(&marker)
+                    .case_insensitive(true)
+                    .build()
+                {
                     merged_regexes.push(re);
-                } else if let Ok(re) = regex::RegexBuilder::new(&regex::escape(&marker)).case_insensitive(true).build() {
+                } else if let Ok(re) = regex::RegexBuilder::new(&regex::escape(&marker))
+                    .case_insensitive(true)
+                    .build()
+                {
                     merged_regexes.push(re);
                 }
             }
