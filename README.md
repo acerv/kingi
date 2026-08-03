@@ -68,13 +68,13 @@ merged_markers = [
     # Line begins with the action verb, followed by "thanks", a target tree
     # ("to <tree>"), or end-of-statement — e.g. "Applied, thanks",
     # "Merged.", "Pushed to for-next".
-    "^\\s*(applied|merged|pushed)(,?\\s+thanks|\\s+to\\s+\\S+|[.!]|\\s*$)",
+    "\\b(applied|merged|pushed)(,?\\s+thanks|\\s+to\\s+\\S+|[.!]|\\s*$)",
     # "thanks, applied" / "thanks merged".
-    "^\\s*thanks,?\\s+(applied|merged|pushed)\\b",
+    "\\bthanks,?\\s+(applied|merged|pushed)\\b",
     # "patchset applied", "series merged" as a line-leading statement.
-    "^\\s*(patch(set|es)?|series)\\s+(applied|merged)(,?\\s+thanks|\\s+to\\s+\\S+|[.!]?\\s*$)",
+    "\\b(patch(set|es)?|series)\\s+(applied|merged)(,?\\s+thanks|\\s+to\\s+\\S+|[.!]?\\s*$)",
     # "Thanks ... merged" / "Thanks ... pushed"
-    "^\\s*(T|t)hanks.*(merged|applied|pushed)",
+    "\\b(T|t)hanks.*(merged|applied|pushed)",
 ]
 ```
 
