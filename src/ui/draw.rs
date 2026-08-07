@@ -101,6 +101,7 @@ pub fn draw_main(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &
 
     app.sidebar_state.select(Some(app.current_mb));
     let unread_filters: Vec<bool> = app.threads.iter().map(|tv| tv.is_unread_only()).collect();
+    let flagged_filters: Vec<bool> = app.threads.iter().map(|tv| tv.is_flagged_only()).collect();
     draw_sidebar(
         frame,
         chunks[0],
@@ -108,6 +109,7 @@ pub fn draw_main(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &
         &app.config.mailboxes,
         &app.maildirs,
         &unread_filters,
+        &flagged_filters,
     );
 
     if let Some(tv) = app.threads.get_mut(app.current_mb) {
@@ -122,6 +124,7 @@ pub fn draw_sidebar(
     mailboxes: &[config::Mailbox],
     maildirs: &[Maildir],
     unread_filters: &[bool],
+    flagged_filters: &[bool],
 ) {
     let items: Vec<ListItem> = mailboxes
         .iter()
@@ -133,6 +136,7 @@ pub fn draw_sidebar(
                 .map(|md| md.unread_count())
                 .unwrap_or(0);
             let filter_active = unread_filters.get(i).copied().unwrap_or(false);
+            let flagged_active = flagged_filters.get(i).copied().unwrap_or(false);
             let (text, style) = if unread > 0 {
                 (
                     format!("{} ({})", m.label, unread),
@@ -146,6 +150,9 @@ pub fn draw_sidebar(
             let mut spans = vec![Span::styled(text, style)];
             if filter_active {
                 spans.push(Span::styled(" [u]", Style::default().fg(Color::Yellow)));
+            }
+            if flagged_active {
+                spans.push(Span::styled(" [f]", Style::default().fg(Color::Red)));
             }
             ListItem::new(Line::from(spans))
         })

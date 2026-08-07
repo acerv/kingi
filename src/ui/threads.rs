@@ -29,6 +29,7 @@ pub struct ThreadsView {
     state: ListState,
     rows: Vec<Row>,
     unread_only: bool,
+    flagged_only: bool,
     search: Option<(String, Regex)>,
     sender_search: Option<(String, Regex)>,
     markers: bool,
@@ -77,6 +78,7 @@ impl ThreadsView {
             state: ListState::default(),
             rows: Vec::new(),
             unread_only: false,
+            flagged_only: false,
             search: None,
             sender_search: None,
             markers,
@@ -161,6 +163,10 @@ impl ThreadsView {
             self.rows.retain(|r| r.thread.parent.is_unread());
         }
 
+        if self.flagged_only {
+            self.rows.retain(|r| r.thread.parent.has_mark(Flag::Flagged));
+        }
+
         if let Some((_, ref re)) = self.search {
             self.rows.retain(|r| re.is_match(&r.thread.parent.subject));
         }
@@ -190,9 +196,25 @@ impl ThreadsView {
         self.unread_only
     }
 
+    /// Return whether the view is currently filtering to flagged only.
+    pub fn is_flagged_only(&self) -> bool {
+        self.flagged_only
+    }
+
     /// Toggle between unread-only and all emails.
     pub fn toggle_unread(&mut self) {
         self.unread_only = !self.unread_only;
+        self.invalidate();
+        // When toggling the filter, start from the top so the user sees all results.
+        if !self.rows.is_empty() {
+            self.state.select(Some(0));
+        }
+        *self.state.offset_mut() = 0;
+    }
+
+    /// Toggle between flagged-only and all emails.
+    pub fn toggle_flagged_only(&mut self) {
+        self.flagged_only = !self.flagged_only;
         self.invalidate();
         // When toggling the filter, start from the top so the user sees all results.
         if !self.rows.is_empty() {

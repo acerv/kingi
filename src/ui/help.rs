@@ -256,6 +256,7 @@ impl HelpView {
             ("J / K", "Next / previous mailbox"),
             ("s", "Toggle sort order"),
             ("V", "Unread-only filter"),
+            ("F", "Flagged-only filter"),
             ("Ctrl+S", "Force sync"),
             ("?", "Help"),
             ("Q", "Quit"),

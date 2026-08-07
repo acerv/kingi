@@ -370,6 +370,11 @@ impl App {
                     tv.toggle_unread();
                 }
             }
+            (_, KeyCode::Char('F')) => {
+                if let Some(tv) = self.threads.get_mut(self.current_mb) {
+                    tv.toggle_flagged_only();
+                }
+            }
             (_, KeyCode::Char('s')) => {
                 let idx = self.current_mb;
                 if let Some(md) = self.maildirs.get_mut(idx) {
@@ -1828,6 +1833,7 @@ mod tests {
         mailboxes: &[config::Mailbox],
         maildirs: &[Maildir],
         unread_filters: &[bool],
+        flagged_filters: &[bool],
         w: u16,
         h: u16,
     ) -> Vec<String> {
@@ -1843,6 +1849,7 @@ mod tests {
                     mailboxes,
                     maildirs,
                     unread_filters,
+                    flagged_filters,
                 );
             })
             .unwrap();
@@ -1875,7 +1882,7 @@ mod tests {
         let mut state = ListState::default();
         state.select(Some(0));
         let mailboxes = vec![mb("Inbox", "/inbox"), mb("Sent", "/sent")];
-        let lines = rendered_sidebar_lines(&mut state, &mailboxes, &[], &[], 30, 6);
+        let lines = rendered_sidebar_lines(&mut state, &mailboxes, &[], &[], &[], 30, 6);
         let content: String = lines.join("\n");
         assert!(content.contains("Inbox"), "got:\n{}", content);
     }
@@ -1889,7 +1896,7 @@ mod tests {
             mb("Sent", "/sent"),
             mb("Drafts", "/drafts"),
         ];
-        let lines = rendered_sidebar_lines(&mut state, &mailboxes, &[], &[], 30, 6);
+        let lines = rendered_sidebar_lines(&mut state, &mailboxes, &[], &[], &[], 30, 6);
         let content: String = lines.join("\n");
         assert!(content.contains("Inbox"), "got:\n{}", content);
         assert!(content.contains("Sent"), "got:\n{}", content);
@@ -1905,7 +1912,7 @@ mod tests {
         let mailboxes = vec![mb("Inbox", "/mail/inbox")];
         // Maildir with unread emails will show count
         let maildirs = vec![Maildir::default()];
-        let lines = rendered_sidebar_lines(&mut state, &mailboxes, &maildirs, &[], 30, 6);
+        let lines = rendered_sidebar_lines(&mut state, &mailboxes, &maildirs, &[], &[], 30, 6);
         let content: String = lines.join("\n");
         // Default Maildir has no unread, so just label shown
         assert!(content.contains("Inbox"), "got:\n{}", content);

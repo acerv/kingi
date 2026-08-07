@@ -133,7 +133,8 @@ binary = "gpg2"
 | `g` / `G`         | First / last email                       |
 | `J` / `K`         | Next / previous mailbox                  |
 | `s`               | Toggle sort order                        |
-| `N`               | Toggle unread-only filter                |
+| `V`               | Toggle unread-only filter                |
+| `F`               | Toggle flagged-only filter               |
 | `Ctrl+S`          | Force sync                               |
 | `?`               | Help                                     |
 | `Q`               | Quit                                     |
