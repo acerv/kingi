@@ -254,7 +254,7 @@ impl App {
                                 err, total_failed
                             ));
                         } else {
-                            self.status_error = Some(format!("sync: {}", err));
+                            self.status_error = Some(format!("sync: {err:#?}"));
                         }
                         self.pending_sync = None;
                         last_sync = Instant::now();
@@ -303,6 +303,13 @@ impl App {
 
     /// Handle a key event. Returns `false` when the app should quit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if self.status_error.is_some() {
+            if key.code == KeyCode::Esc || key.code == KeyCode::Enter {
+                self.status_error = None;
+            }
+            return true;
+        }
+
         if let Some(ref mut hv) = self.help {
             if hv.on_key(key) == HelpAction::Close {
                 self.help = None;
@@ -599,7 +606,7 @@ impl App {
                     let content = compose::Draft::parse(&text).to_rfc2822(&from.full());
                     if let Some(md) = self.maildirs.get_mut(idx) {
                         if let Err(e) = md.write_email(&content) {
-                            self.status_error = Some(e.to_string());
+                            self.status_error = Some(format!("{e:#?}"));
                         } else {
                             let _ = md.sync();
                             if let Some(tv) = self.threads.get_mut(idx) {
@@ -680,7 +687,7 @@ impl App {
                 if let Some(raw) = raw
                     && let Err(e) = self.copy_to_clipboard(&raw)
                 {
-                    self.status_error = Some(format!("clipboard: {e}"));
+                    self.status_error = Some(format!("clipboard: {e:#?}"));
                 }
             }
             _ => {}
@@ -905,7 +912,7 @@ impl App {
         if is_drafts {
             match thread.parent.to_draft() {
                 Ok(draft) => self.open_editor(draft, ComposeKind::New),
-                Err(e) => self.status_error = Some(e.to_string()),
+                Err(e) => self.status_error = Some(format!("{e:#?}")),
             }
         } else {
             thread.parent.mark(Flag::Seen);
@@ -984,7 +991,7 @@ impl App {
         let id = thread.parent.message_id.clone();
         match thread.parent.reply_draft(quote, &self.config.smtp.username) {
             Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
-            Err(e) => self.status_error = Some(e.to_string()),
+            Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
     }
 
@@ -999,10 +1006,10 @@ impl App {
                 let id = email.message_id.clone();
                 match email.reply_draft(quote, &self.config.smtp.username) {
                     Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
-                    Err(e) => self.status_error = Some(e.to_string()),
+                    Err(e) => self.status_error = Some(format!("{e:#?}")),
                 }
             }
-            Err(e) => self.status_error = Some(e.to_string()),
+            Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
     }
 
@@ -1024,7 +1031,7 @@ impl App {
             .quick_reply_draft(&template, &self.config.smtp.username)
         {
             Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
-            Err(e) => self.status_error = Some(e.to_string()),
+            Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
     }
 
@@ -1043,10 +1050,10 @@ impl App {
                 let id = email.message_id.clone();
                 match email.quick_reply_draft(&template, &self.config.smtp.username) {
                     Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
-                    Err(e) => self.status_error = Some(e.to_string()),
+                    Err(e) => self.status_error = Some(format!("{e:#?}")),
                 }
             }
-            Err(e) => self.status_error = Some(e.to_string()),
+            Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
     }
 
@@ -1061,7 +1068,7 @@ impl App {
         let id = thread.parent.message_id.clone();
         match thread.parent.forward_draft() {
             Ok(draft) => self.open_editor(draft, ComposeKind::Forward(id)),
-            Err(e) => self.status_error = Some(e.to_string()),
+            Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
     }
 
@@ -1076,10 +1083,10 @@ impl App {
                 let id = email.message_id.clone();
                 match email.forward_draft() {
                     Ok(draft) => self.open_editor(draft, ComposeKind::Forward(id)),
-                    Err(e) => self.status_error = Some(e.to_string()),
+                    Err(e) => self.status_error = Some(format!("{e:#?}")),
                 }
             }
-            Err(e) => self.status_error = Some(e.to_string()),
+            Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
     }
 
@@ -1196,7 +1203,7 @@ impl App {
             std::fs::rename(&path, &dest)
                 .or_else(|_| std::fs::copy(&path, &dest).and_then(|_| std::fs::remove_file(&path)))
         }) {
-            self.status_error = Some(e.to_string());
+            self.status_error = Some(format!("{e:#?}"));
             return;
         }
 
@@ -1249,7 +1256,7 @@ impl App {
         let target_dir = self.maildirs[target_mb_idx].path().to_string();
         let target_cur = std::path::Path::new(&target_dir).join("cur");
         if let Err(e) = std::fs::create_dir_all(&target_cur) {
-            self.status_error = Some(e.to_string());
+            self.status_error = Some(format!("{e:#?}"));
             return;
         }
 
@@ -1262,7 +1269,7 @@ impl App {
             if let Err(e) = std::fs::rename(path, &dest)
                 .or_else(|_| std::fs::copy(path, &dest).and_then(|_| std::fs::remove_file(path)))
             {
-                self.status_error = Some(e.to_string());
+                self.status_error = Some(format!("{e:#?}"));
                 failed = true;
                 break;
             }

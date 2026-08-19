@@ -164,7 +164,8 @@ impl ThreadsView {
         }
 
         if self.flagged_only {
-            self.rows.retain(|r| r.thread.parent.has_mark(Flag::Flagged));
+            self.rows
+                .retain(|r| r.thread.parent.has_mark(Flag::Flagged));
         }
 
         if let Some((_, ref re)) = self.search {

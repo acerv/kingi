@@ -87,6 +87,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     draw_statusbar(frame, chunks[3], app);
     draw_move_popup(frame, app);
     draw_send_popup(frame, app);
+    draw_error_popup(frame, app);
 
     if let Some(ref mut hv) = app.help {
         hv.draw(frame, area);
@@ -175,8 +176,6 @@ fn draw_statusbar(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: 
         Paragraph::new(format!(" /{input}_")).style(Style::default().fg(Color::Yellow))
     } else if let SearchMode::Typing(input) = &app.sender_search {
         Paragraph::new(format!(" \\{input}_")).style(Style::default().fg(Color::Yellow))
-    } else if let Some(err) = &app.status_error {
-        Paragraph::new(format!(" error: {err}")).style(Style::default().fg(Color::Red))
     } else if app.current_tab == 0 {
         let mut spans = vec![Span::styled(
             " r reply  R reply+quote  C compose  / search  j/k↑↓ move  ? help  Q quit",
@@ -296,4 +295,34 @@ pub fn draw_list_popup(frame: &mut ratatui::Frame, title: &str, items: &[String]
         .highlight_symbol("> ");
 
     frame.render_stateful_widget(list, inner_chunks[1], &mut state);
+}
+
+fn draw_error_popup(frame: &mut ratatui::Frame, app: &App) {
+    if let Some(err) = &app.status_error {
+        use ratatui::widgets::{Clear, Wrap};
+
+        let area = frame.area();
+        let popup_w = 80u16.min(area.width.saturating_sub(4));
+        let popup_h = 20u16.min(area.height.saturating_sub(4));
+
+        let x = area.width.saturating_sub(popup_w) / 2;
+        let y = area.height.saturating_sub(popup_h) / 2;
+        let popup_area = ratatui::layout::Rect::new(x, y, popup_w, popup_h);
+
+        frame.render_widget(Clear, popup_area);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red))
+            .title(Span::styled(
+                " Error ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ));
+
+        let paragraph = Paragraph::new(err.as_str())
+            .block(block)
+            .wrap(Wrap { trim: false });
+
+        frame.render_widget(paragraph, popup_area);
+    }
 }
