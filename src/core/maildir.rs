@@ -141,11 +141,11 @@ impl Maildir {
             return true;
         }
 
-        let reply_to = &email.reply_to.clone();
+        let in_reply_to = &email.in_reply_to.clone();
         let thread = Rc::new(EmailThread::new(email));
 
         // Step 2: link to parent or queue for later.
-        if let Some(reply_to_id) = &reply_to {
+        if let Some(reply_to_id) = &in_reply_to {
             let reply_to_id = reply_to_id.to_string();
             if let Some(parent) = self.lookup.get(&reply_to_id) {
                 // Parent already seen — attach directly.

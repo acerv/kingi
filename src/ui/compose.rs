@@ -152,7 +152,7 @@ impl EmailCompose for Email {
             draft.push_str(&format!("Cc: {cc}\n"));
         }
         draft.push_str(&format!("Subject: {}\n", self.subject));
-        if let Some(irt) = &self.reply_to {
+        if let Some(irt) = &self.in_reply_to {
             draft.push_str(&format!("In-Reply-To: <{irt}>\n"));
         }
         draft.push_str(&format!("{BODY_SENTINEL}\n"));
@@ -237,10 +237,18 @@ fn reply_headers(email: &Email, msg: &mail_parser::Message, own_address: &str) -
         a.map(|a| a.iter().map(Address::from).collect())
             .unwrap_or_default()
     };
+
+    // RFC 5322 §3.6.2: replies must be addressed to `Reply-To:` when present,
+    // falling back to `From:` otherwise. This is what makes replies to
+    // DMARC-munged mailing-list mail (From: rewritten to the list) reach the
+    // real author carried in `Reply-To:`.
+    let recipient = email.reply_to.clone().unwrap_or_else(|| email.from.clone());
+
     let mut cc_addrs: Vec<Address> = parse_addrs(msg.to())
         .into_iter()
         .chain(parse_addrs(msg.cc()))
         .filter(|a| a.address().to_lowercase() != own_address.to_lowercase())
+        .filter(|a| a.address().to_lowercase() != recipient.address().to_lowercase())
         .collect();
     let mut seen = std::collections::HashSet::new();
     cc_addrs.retain(|a| seen.insert(a.address().to_lowercase()));
@@ -252,7 +260,7 @@ fn reply_headers(email: &Email, msg: &mail_parser::Message, own_address: &str) -
 
     let mut headers = format!(
         "To: {}\nSubject: {}\nIn-Reply-To: <{}>\n",
-        email.from.full(),
+        recipient.full(),
         reply_subject,
         email.message_id
     );
@@ -484,6 +492,56 @@ mod tests {
         let cc_line = draft.lines().find(|l| l.starts_with("Cc:")).unwrap_or("");
         let count = cc_line.matches("bob@x.com").count();
         assert_eq!(count, 1, "bob@x.com must appear only once in Cc: {draft}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── reply_draft Reply-To handling ────────────────────────────────────────
+
+    #[test]
+    fn reply_draft_prefers_reply_to_over_from() {
+        let content = "Message-ID: <id@test>\r\nFrom: alice@x.com\r\nReply-To: real@author.com\r\nTo: me@x.com\r\nSubject: Hi\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\nBody\r\n";
+        let path = write_tmp_email(content);
+        let email = crate::core::thread::Email::from_file(&path).unwrap();
+        let draft = email.reply_draft(false, "me@x.com").unwrap();
+        let to_line = draft.lines().find(|l| l.starts_with("To:")).unwrap_or("");
+        assert!(
+            to_line.contains("real@author.com"),
+            "To: must use Reply-To address: {draft}"
+        );
+        assert!(
+            !to_line.contains("alice@x.com"),
+            "To: must not use From when Reply-To is present: {draft}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reply_draft_falls_back_to_from_without_reply_to() {
+        let content = "Message-ID: <id@test>\r\nFrom: alice@x.com\r\nTo: me@x.com\r\nSubject: Hi\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\nBody\r\n";
+        let path = write_tmp_email(content);
+        let email = crate::core::thread::Email::from_file(&path).unwrap();
+        let draft = email.reply_draft(false, "me@x.com").unwrap();
+        let to_line = draft.lines().find(|l| l.starts_with("To:")).unwrap_or("");
+        assert!(
+            to_line.contains("alice@x.com"),
+            "To: must fall back to From: {draft}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reply_draft_reply_to_recipient_not_duplicated_in_cc() {
+        // Munged mailing-list style: From is the list, Reply-To is the author,
+        // and the author also appears in the original To.
+        let content = "Message-ID: <id@test>\r\nFrom: list@lists.example\r\nReply-To: author@x.com\r\nTo: author@x.com, me@x.com\r\nSubject: Hi\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\nBody\r\n";
+        let path = write_tmp_email(content);
+        let email = crate::core::thread::Email::from_file(&path).unwrap();
+        let draft = email.reply_draft(false, "me@x.com").unwrap();
+        let cc_line = draft.lines().find(|l| l.starts_with("Cc:")).unwrap_or("");
+        assert!(
+            !cc_line.contains("author@x.com"),
+            "recipient address must not be duplicated in Cc: {draft}"
+        );
         let _ = std::fs::remove_file(&path);
     }
 

@@ -45,10 +45,14 @@ use std::rc::Rc;
 pub struct Email {
     /// Unique message identifier.
     pub message_id: String,
-    /// Indentifier for the reply-to message.
-    pub reply_to: Option<String>,
+    /// Identifier of the parent message, parsed from the `In-Reply-To:` header.
+    /// Used to build the thread tree.
+    pub in_reply_to: Option<String>,
     /// Sender address parsed from the `From:` header.
     pub from: Address,
+    /// Address parsed from the `Reply-To:` header, when present. Replies must
+    /// prefer this over `from` (RFC 5322 §3.6.2).
+    pub reply_to: Option<Address>,
     /// Subject of the email.
     pub subject: String,
     /// Unix timestamp (seconds since epoch) from the `Date:` header.
@@ -86,14 +90,19 @@ impl Email {
                 )
             })
             .unwrap_or_default();
-        let reply_to = parsed.in_reply_to().as_text().map(str::to_string);
+        let in_reply_to = parsed.in_reply_to().as_text().map(str::to_string);
+        let reply_to = parsed
+            .reply_to()
+            .and_then(|a| a.iter().next())
+            .map(Address::from);
         let subject = parsed.subject().unwrap_or_default().to_string();
         let is_encrypted = gpg::is_pgp_mime_encrypted(&parsed);
 
         Ok(Self {
             message_id: id.clone(),
-            reply_to,
+            in_reply_to,
             from,
+            reply_to,
             subject,
             timestamp,
             is_encrypted,
@@ -263,7 +272,7 @@ impl Email {
     #[cfg(test)]
     pub fn new(
         message_id: &str,
-        reply_to: Option<String>,
+        in_reply_to: Option<String>,
         from: &str,
         subject: &str,
         timestamp: Option<i64>,
@@ -271,8 +280,9 @@ impl Email {
     ) -> Self {
         Self {
             message_id: message_id.to_string(),
-            reply_to,
+            in_reply_to,
             from: Address::new(from, ""),
+            reply_to: None,
             subject: subject.to_string(),
             timestamp,
             is_encrypted: false,
@@ -345,8 +355,9 @@ mod tests {
     fn make_email(path: PathBuf) -> Email {
         Email {
             message_id: "id@test".to_string(),
-            reply_to: None,
+            in_reply_to: None,
             from: Address::default(),
+            reply_to: None,
             subject: String::new(),
             timestamp: None,
             is_encrypted: false,
@@ -445,7 +456,7 @@ mod tests {
             ),
         );
         let email = Email::from_file(&path).unwrap();
-        assert_eq!(email.reply_to, Some("parent@test".to_string()));
+        assert_eq!(email.in_reply_to, Some("parent@test".to_string()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
