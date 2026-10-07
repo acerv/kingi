@@ -4,8 +4,8 @@
 
 [![Rust](https://github.com/acerv/kingi/actions/workflows/rust.yml/badge.svg)](https://github.com/acerv/kingi/actions)
 
-A fast, Vim-inspired terminal email client for Maildir folders, written in Rust.
-Heavily inspired by [aerc](https://aerc-mail.org/).
+A fast, Vim-inspired terminal email client for Maildir folders,
+written in Rust. Heavily inspired by [aerc](https://aerc-mail.org/).
 
 ![demo](demo.gif)
 
@@ -19,7 +19,7 @@ cargo install --path .
 
 - Threaded email list with tree indentation
 - Diff/patch syntax highlighting in email bodies
-- Reply, reply-all with quoting, forward, compose in `$VISUAL`/`$EDITOR`
+- Reply, reply-all with quoting, forward, built-in Vim-style compose editor
 - Drafts and Trash mailboxes (auto-created if not configured)
 - Read/unread tracking, flagging, live search, unread-only filter
 - Multiple mailboxes with sidebar, tab-based email viewing
@@ -78,7 +78,8 @@ merged_markers = [
 ]
 ```
 
-A plain-text `~/.config/kingi/signature` file, if present, is appended to every draft.
+A plain-text `~/.config/kingi/signature` file, if present, is appended to
+every draft.
 
 ### Quick replies
 
@@ -172,3 +173,31 @@ binary = "gpg2"
 | Key                 | Action              |
 | ------------------- | ------------------- |
 | `Ctrl+N` / `Ctrl+P` | Next / previous tab |
+
+## History
+
+This project started with the aim of learning more about the Rust
+programming language. Over the 2025 Christmas holidays, I set myself a
+challenge: how to design an algorithm to load emails in Maildir format with
+a maximum execution time of `O(n)`.
+
+That challenge led to learning Rust's shared memory management, fighting
+with the borrow checker, and achieving C-like performance. It was a lot
+of fun, even if the borrow-checker struggle is very real.
+
+Around March–April 2026, the emergence of more capable LLMs, such as
+Opus 4.6, made it possible to speed up development and tackle a task I
+hadn't been able to finish due to work and personal commitments: writing
+a proper UI around that algorithm.
+
+It worked, but with a caveat: LLMs produced tons of bad code. I had to
+work through that, learning how to use these new tools effectively while
+adding all the features I had always wanted in a terminal email client:
+keybindings similar to `aerc`, fast loading speeds, and a workflow
+tailored for mailing-list patch reviews (LTP and the Linux kernel in
+particular).
+
+In the end, it worked out. `kingi` became my primary terminal email
+client: fast, easy to use, shaped around my workflow, and with unique
+features no other client offered. This is the best email client I have ever
+used, and I want to share it with everyone who is willing to try it out.
