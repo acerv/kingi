@@ -195,8 +195,9 @@ available for retry.
 
 This project started with the aim of learning more about the Rust
 programming language. Over the 2025 Christmas holidays, I set myself a
-challenge: how to design an algorithm to load emails in Maildir format with
-a maximum execution time of `O(n)`.
+challenge: design an algorithm to load `n` emails from a Maildir and
+reconstruct their threads in `O(n)` time. Each thread forms a tree, with
+emails as nodes and replies linked to their parent messages.
 
 That challenge led to learning Rust's shared memory management, fighting
 with the borrow checker, and achieving C-like performance. It was a lot
