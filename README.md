@@ -112,29 +112,18 @@ GPG binary path:
 binary = "gpg2"
 ```
 
-### Received attachments
+### Attachments
 
-In an email tab, press `a` to list attachments with their names and sizes.
-Use `j`/`k` or the arrow keys to select a file, then press `Enter` or `s`.
-Edit the destination path and press `Enter` to save. The default path is
-the attachment filename in the current working directory. Existing files
-are never overwritten. Press `Esc` to cancel or close the list.
+Kingi supports sending and receiving file attachments. Attachment lists
+show filenames and sizes. Received files can be saved to disk without
+overwriting existing files, including attachments in PGP/MIME emails after
+decryption.
 
-Attachments inside PGP/MIME encrypted emails are available after decryption.
-
-### Sending attachments
-
-In the compose editor, press `Ctrl+A` to open the attachment list. Press `a`
-to add a file. Enter a relative path, an absolute path, or a path starting
-with `~/`. Matching files and folders appear as you type. Use the arrow keys
-to select a match and `Tab` to complete it. Folder paths end with `/` so you
-can continue browsing. Press `Enter` to attach a file.
-
-In the attachment list, use `j`/`k` or the arrow keys to select a file and
-`d` to remove it. Press `Esc` to cancel the path prompt or close the list.
-Files are read when added, so later changes to them do not affect the email.
-Saved drafts include the file contents and restore them when reopened.
-Send or save errors leave the compose tab open for retry.
+The compose editor supports adding and removing files, with filesystem
+path completion for relative, absolute, and home-directory paths. Attached
+files retain their contents even if the original files change. Saved
+drafts preserve attachments, and send or save errors keep the message
+available for retry.
 
 ## Key bindings
 
