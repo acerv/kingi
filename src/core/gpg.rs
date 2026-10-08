@@ -163,7 +163,10 @@ fn parse_gnupg_status(stderr: &str) -> Option<VerifyResult> {
 /// Structure: part 0 = multipart/encrypted container,
 ///            part 1 = application/pgp-encrypted (version),
 ///            part 2 = application/octet-stream (ciphertext).
-pub fn decrypt_pgp_mime(msg: &Message, gpg_binary: &str) -> Result<(String, CryptoStatus)> {
+pub fn decrypt_pgp_mime(
+    msg: &Message,
+    gpg_binary: &str,
+) -> Result<(Message<'static>, CryptoStatus)> {
     let ciphertext = extract_part_bytes(msg, 2)
         .ok_or_else(|| anyhow!("missing encrypted data part in PGP/MIME message"))?;
 
@@ -173,8 +176,8 @@ pub fn decrypt_pgp_mime(msg: &Message, gpg_binary: &str) -> Result<(String, Cryp
         ciphertext,
     )?;
 
-    // The decrypted output is itself a MIME message; re-parse to extract body.
-    let body = extract_body_from_bytes(&plaintext_bytes)?;
+    // Keep the entire decrypted MIME message, including its attachments.
+    let decrypted = parse_decrypted_message(&plaintext_bytes)?;
 
     let verify = parse_gnupg_status(&stderr);
     let status = match verify {
@@ -182,7 +185,7 @@ pub fn decrypt_pgp_mime(msg: &Message, gpg_binary: &str) -> Result<(String, Cryp
         None => CryptoStatus::Decrypted,
     };
 
-    Ok((body, status))
+    Ok((decrypted, status))
 }
 
 /// Decrypt an inline PGP encrypted message.
@@ -389,15 +392,12 @@ fn extract_raw_part_bytes<'a>(msg: &'a Message, part_idx: usize) -> Option<&'a [
     }
 }
 
-/// Parse decrypted bytes as a MIME message and extract the text body.
-fn extract_body_from_bytes(bytes: &[u8]) -> Result<String> {
-    let parsed = MessageParser::default()
+/// Preserve the body and attachments after the GPG output buffer is dropped.
+fn parse_decrypted_message(bytes: &[u8]) -> Result<Message<'static>> {
+    MessageParser::default()
         .parse(bytes)
-        .ok_or_else(|| anyhow!("failed to parse decrypted message"))?;
-    Ok(parsed
-        .body_text(0)
-        .map(|t| t.into_owned())
-        .unwrap_or_default())
+        .map(Message::into_owned)
+        .ok_or_else(|| anyhow!("failed to parse decrypted message"))
 }
 
 /// Extract the text body from the signed content part of a PGP/MIME message.
@@ -634,20 +634,34 @@ mod tests {
         assert!(body.is_empty());
     }
 
-    // ── extract_body_from_bytes ──────────────────────────────────────────────
+    // ── parse_decrypted_message ──────────────────────────────────────────────
 
     #[test]
     fn body_from_plain_text_bytes() {
         let raw = b"Content-Type: text/plain\r\n\r\nDecrypted content here\r\n";
-        let body = extract_body_from_bytes(raw).unwrap();
+        let msg = parse_decrypted_message(raw).unwrap();
+        let body = msg.body_text(0).unwrap();
         assert_eq!(body, "Decrypted content here\r\n");
     }
 
     #[test]
     fn body_from_empty_message() {
         let raw = b"Content-Type: text/plain\r\n\r\n";
-        let body = extract_body_from_bytes(raw).unwrap();
+        let msg = parse_decrypted_message(raw).unwrap();
+        let body = msg.body_text(0).unwrap();
         assert!(body.is_empty());
+    }
+
+    #[test]
+    fn decrypted_message_preserves_attachments() {
+        let raw = b"Content-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: text/plain\r\n\r\nDecrypted body\r\n--x\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=report.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\nAAEC/w==\r\n--x--\r\n".to_vec();
+        let msg = parse_decrypted_message(&raw).unwrap();
+        drop(raw);
+        assert_eq!(msg.body_text(0).unwrap(), "Decrypted body");
+        let attachments = crate::core::attachment::Attachment::from_message(&msg);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].name, "report.pdf");
+        assert_eq!(attachments[0].data, [0, 1, 2, 255]);
     }
 
     // ── friendly_gpg_error ──────────────────────────────────────────────────

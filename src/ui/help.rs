@@ -267,6 +267,7 @@ impl HelpView {
         email_keys.extend([
             ("f", "Forward"),
             ("Y", "Copy body to clipboard"),
+            ("a", "List/save attachments (Enter, Esc)"),
             ("m / M", "Move email / thread"),
             ("Ctrl+f", "Toggle flagged"),
             ("Ctrl+x", "Toggle merged"),

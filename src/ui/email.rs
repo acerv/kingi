@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Andrea Cervesato <andrea.cervesato@suse.com>
 use crate::core::address::Address;
+use crate::core::attachment::Attachment;
 use crate::core::gpg::{self, CryptoStatus, InlinePgpType, PgpMimeType, VerifyResult};
 use crate::core::thread::Email;
 use anyhow::Result;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -25,6 +27,10 @@ pub struct EmailView {
     scroll: u16,
     raw_body: String,
     crypto_status: CryptoStatus,
+    attachments: Vec<Attachment>,
+    attachment_selected: Option<usize>,
+    save_path: Option<String>,
+    attachment_notice: Option<String>,
 }
 
 impl EmailView {
@@ -53,7 +59,9 @@ impl EmailView {
         let date = format_date(email.timestamp);
 
         // Detect and handle PGP content.
-        let (raw_body, crypto_status) = decrypt_or_verify(&msg, gpg_binary, before_gpg, after_gpg);
+        let mut attachments = Attachment::from_message(&msg);
+        let (raw_body, crypto_status) =
+            decrypt_or_verify(&msg, gpg_binary, before_gpg, after_gpg, &mut attachments);
 
         let display_body = if raw_body.is_empty() {
             "— no text body —".to_string()
@@ -79,6 +87,10 @@ impl EmailView {
             scroll: 0,
             raw_body,
             crypto_status,
+            attachments,
+            attachment_selected: None,
+            save_path: None,
+            attachment_notice: None,
         })
     }
 
@@ -116,6 +128,96 @@ impl EmailView {
     pub fn raw_body(&self) -> &str {
         &self.raw_body
     }
+
+    /// Handle the attachment dialog before the usual email key bindings.
+    pub fn attachment_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if let Some(ref mut path) = self.save_path {
+            match key.code {
+                KeyCode::Esc => self.save_path = None,
+                KeyCode::Backspace => {
+                    path.pop();
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    path.push(c);
+                }
+                KeyCode::Enter => {
+                    let attachment = &self.attachments[self.attachment_selected.unwrap()];
+                    attachment.save(std::path::Path::new(path))?;
+                    self.attachment_notice = Some(format!("Saved to {path}"));
+                    self.save_path = None;
+                }
+                _ => {}
+            }
+            return Ok(true);
+        }
+        if let Some(ref mut selected) = self.attachment_selected {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.attachment_selected = None;
+                    self.attachment_notice = None;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    *selected = (*selected + 1).min(self.attachments.len().saturating_sub(1));
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    *selected = selected.saturating_sub(1);
+                }
+                KeyCode::Enter | KeyCode::Char('s') if !self.attachments.is_empty() => {
+                    self.save_path = Some(self.attachments[*selected].name.clone());
+                    self.attachment_notice = None;
+                }
+                _ => {}
+            }
+            return Ok(true);
+        }
+        if key.code == KeyCode::Char('a') && key.modifiers == KeyModifiers::NONE {
+            self.attachment_selected = Some(0);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn draw_attachments(&self, frame: &mut ratatui::Frame) {
+        let Some(selected) = self.attachment_selected else {
+            return;
+        };
+        let labels: Vec<String> = if self.attachments.is_empty() {
+            vec!["No attachments".to_string()]
+        } else {
+            self.attachments
+                .iter()
+                .map(|a| format!("{} ({} bytes)", a.name, a.data.len()))
+                .collect()
+        };
+        let title = self
+            .attachment_notice
+            .as_deref()
+            .unwrap_or(" Attachments — Enter: save, Esc: close ");
+        crate::ui::draw::draw_list_popup(frame, title, &labels, selected);
+
+        if let Some(path) = &self.save_path {
+            let area = frame.area();
+            let w = 80u16.min(area.width);
+            let h = 5u16.min(area.height);
+            let popup = ratatui::layout::Rect::new(
+                area.x + area.width.saturating_sub(w) / 2,
+                area.y + area.height.saturating_sub(h) / 2,
+                w,
+                h,
+            );
+            frame.render_widget(ratatui::widgets::Clear, popup);
+            frame.render_widget(
+                Paragraph::new(format!("{path}_\nEnter: save (no overwrite) | Esc: cancel"))
+                    .wrap(Wrap { trim: false })
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(" Save attachment to "),
+                    ),
+                popup,
+            );
+        }
+    }
 }
 
 /// Render the email view into `area`.
@@ -137,6 +239,7 @@ pub fn draw(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, view: &mut 
 
     let crypto_line = crypto_status_line(&view.crypto_status);
     let crypto_height = if crypto_line.is_some() { 1 } else { 0 };
+    let attachment_height = usize::from(!view.attachments.is_empty());
 
     let header_height = (from_lines.len()
         + to_lines.len()
@@ -144,7 +247,8 @@ pub fn draw(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, view: &mut 
         + subject_lines.len()
         + 1
         + 1
-        + crypto_height) as u16;
+        + crypto_height
+        + attachment_height) as u16;
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -163,6 +267,12 @@ pub fn draw(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, view: &mut 
     if let Some(line) = crypto_line {
         header_text.push(line);
     }
+    if !view.attachments.is_empty() {
+        header_text.push(Line::from(Span::styled(
+            format!("Attachments: {} (a to list/save)", view.attachments.len()),
+            Style::default().fg(Color::Cyan),
+        )));
+    }
 
     let header = Paragraph::new(header_text).block(Block::default().borders(Borders::BOTTOM));
     frame.render_widget(header, chunks[0]);
@@ -179,6 +289,7 @@ pub fn draw(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, view: &mut 
         .wrap(Wrap { trim: false })
         .scroll((view.scroll, 0));
     frame.render_widget(body, chunks[1]);
+    view.draw_attachments(frame);
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -192,16 +303,22 @@ fn decrypt_or_verify(
     gpg_binary: &str,
     before_gpg: &mut dyn FnMut(),
     after_gpg: &mut dyn FnMut(),
+    attachments: &mut Vec<Attachment>,
 ) -> (String, CryptoStatus) {
     // 1. Check for PGP/MIME (multipart/encrypted or multipart/signed).
     if let Some(pgp_type) = gpg::detect_pgp_mime(msg) {
         match pgp_type {
             PgpMimeType::Encrypted => {
+                // The outer MIME parts are ciphertext, not user attachments.
+                attachments.clear();
                 before_gpg();
                 let result = gpg::decrypt_pgp_mime(msg, gpg_binary);
                 after_gpg();
                 match result {
-                    Ok((body, status)) => return (body, status),
+                    Ok((decrypted, status)) => {
+                        *attachments = Attachment::from_message(&decrypted);
+                        return (extract_body(&decrypted), status);
+                    }
                     Err(e) => {
                         return (
                             extract_body(msg),
@@ -439,6 +556,10 @@ impl EmailView {
             scroll: 0,
             raw_body: String::new(),
             crypto_status: CryptoStatus::None,
+            attachments: Vec::new(),
+            attachment_selected: None,
+            save_path: None,
+            attachment_notice: None,
         }
     }
 }
@@ -493,6 +614,62 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn attachment_dialog_lists_saves_and_keeps_errors_retryable() {
+        let dir = temp_dir();
+        let mime = "Content-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: text/plain\r\n\r\nBody\r\n--x\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=report.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\nAAEC/w==\r\n--x--\r\n";
+        let content = format!(
+            "Message-ID: <attachment@test>\r\nFrom: a@x.com\r\nSubject: Document\r\nMIME-Version: 1.0\r\n{mime}"
+        );
+        let mut view = make_view(&dir, &content);
+        assert_eq!(view.raw_body(), "Body");
+        assert!(
+            rendered_lines(&mut view, 100, 30)
+                .iter()
+                .any(|line| line.contains("Attachments: 1"))
+        );
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert!(view.attachment_key(key(KeyCode::Char('a'))).unwrap());
+        assert!(
+            rendered_lines(&mut view, 100, 30)
+                .iter()
+                .any(|line| line.contains("report.pdf (4 bytes)"))
+        );
+        view.attachment_key(key(KeyCode::Enter)).unwrap();
+        assert_eq!(view.save_path.as_deref(), Some("report.pdf"));
+        let path = dir.join("saved.pdf");
+        view.save_path = Some(path.to_str().unwrap().to_string());
+        view.attachment_key(key(KeyCode::Enter)).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), [0, 1, 2, 255]);
+        assert!(view.attachment_notice.is_some());
+        view.attachment_key(key(KeyCode::Enter)).unwrap();
+        view.save_path = Some(path.to_str().unwrap().to_string());
+        assert!(view.attachment_key(key(KeyCode::Enter)).is_err());
+        assert!(view.save_path.is_some());
+        view.attachment_key(key(KeyCode::Esc)).unwrap();
+        view.attachment_key(key(KeyCode::Esc)).unwrap();
+        assert!(view.attachment_selected.is_none());
+        assert!(!view.attachment_key(key(KeyCode::Char('j'))).unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn attachment_dialog_handles_messages_without_attachments() {
+        let mut view = EmailView::new_stub("Plain email");
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        view.attachment_key(key(KeyCode::Char('a'))).unwrap();
+        view.attachment_key(key(KeyCode::Down)).unwrap();
+        view.attachment_key(key(KeyCode::Enter)).unwrap();
+        assert!(view.save_path.is_none());
+        assert!(
+            rendered_lines(&mut view, 80, 20)
+                .iter()
+                .any(|line| line.contains("No attachments"))
+        );
+        view.attachment_key(key(KeyCode::Esc)).unwrap();
+        assert!(view.attachment_selected.is_none());
     }
 
     // ── subject ──────────────────────────────────────────────────────────────

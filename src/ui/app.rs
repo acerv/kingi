@@ -621,6 +621,16 @@ impl App {
     }
 
     fn handle_email_tab_key(&mut self, key: KeyEvent, ei: usize) {
+        if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
+            match ev.attachment_key(key) {
+                Ok(true) => return,
+                Err(err) => {
+                    self.status_error = Some(format!("{err:#}"));
+                    return;
+                }
+                Ok(false) => {}
+            }
+        }
         match (key.modifiers, key.code) {
             (_, KeyCode::Char('q')) => self.close_current_tab(),
             (_, KeyCode::Char('J')) => {

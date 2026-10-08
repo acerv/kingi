@@ -208,7 +208,7 @@ fn draw_statusbar(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: 
         }
         Paragraph::new(Line::from(spans))
     } else {
-        Paragraph::new(" j/k scroll  J/K email  r reply  R reply+quote  C compose  q close")
+        Paragraph::new(" j/k scroll  J/K email  r reply  R reply+quote  a attachments  q close")
             .style(Style::default().fg(Color::DarkGray))
     };
     frame.render_widget(widget, area);

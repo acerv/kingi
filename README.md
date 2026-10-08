@@ -28,6 +28,7 @@ cargo install --path .
 - Periodic background sync via a configurable shell command (e.g. `mbsync`)
 - Quick reply templates bound to number keys (`1`-`9`, `0`)
 - GPG decryption and signature verification (PGP/MIME and inline PGP)
+- List received attachments and save them to disk
 
 ## Configuration
 
@@ -110,6 +111,16 @@ GPG binary path:
 binary = "gpg2"
 ```
 
+### Received attachments
+
+In an email tab, press `a` to list attachments with their names and sizes.
+Use `j`/`k` or the arrow keys to select a file, then press `Enter` or `s`.
+Edit the destination path and press `Enter` to save. The default path is
+the attachment filename in the current working directory. Existing files
+are never overwritten. Press `Esc` to cancel or close the list.
+
+Attachments inside PGP/MIME encrypted emails are available after decryption.
+
 ## Key bindings
 
 ### Thread list
@@ -148,6 +159,7 @@ binary = "gpg2"
 | `1`-`9`, `0`      | Quick reply with template |
 | `f`               | Forward                   |
 | `Y`               | Copy body to clipboard    |
+| `a`               | List / save attachments   |
 | `m` / `M`         | Move email / move thread  |
 | `Ctrl+f`          | Toggle flagged            |
 | `Ctrl+x`          | Toggle merged             |
