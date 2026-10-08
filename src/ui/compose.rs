@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Andrea Cervesato <andrea.cervesato@suse.com>
 use crate::core::address::Address;
+use crate::core::attachment::Attachment;
 use crate::core::config;
 use crate::core::thread::Email;
 use anyhow::Result;
@@ -14,6 +15,7 @@ pub struct Draft {
     pub subject: String,
     pub in_reply_to: Option<String>,
     pub body: String,
+    pub attachments: Vec<Attachment>,
 }
 
 impl Draft {
@@ -50,49 +52,48 @@ impl Draft {
             subject,
             in_reply_to,
             body,
+            attachments: Vec::new(),
         }
     }
 
     /// Convert this draft into a minimal RFC 2822 email string suitable for
     /// writing into a maildir folder via `Maildir::write_email`.
-    pub fn to_rfc2822(&self, from: &str) -> String {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let pid = std::process::id();
-        let message_id = format!("{timestamp}.{pid}.localhost");
-        let mut email = format!("Message-ID: <{message_id}>\r\n");
-        email.push_str(&format!("From: {from}\r\n"));
-        if !self.to.is_empty() {
-            email.push_str(&format!(
-                "To: {}\r\n",
-                self.to
-                    .iter()
-                    .map(|a| a.full())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+    pub fn to_rfc2822(&self, from: &str) -> Result<String> {
+        let message = self.build_message(from, true)?;
+        Ok(String::from_utf8(message.formatted())?)
+    }
+
+    pub fn build_message(&self, from: &str, saving_draft: bool) -> Result<lettre::Message> {
+        use lettre::message::{MultiPart, SinglePart, header::ContentType};
+        let sender: lettre::message::Mailbox = from.parse()?;
+        let mut builder = lettre::Message::builder()
+            .from(sender.clone())
+            .subject(&self.subject)
+            .message_id(None);
+        for addr in &self.to {
+            builder = builder.to(addr.full().parse()?);
         }
-        if !self.cc.is_empty() {
-            email.push_str(&format!(
-                "Cc: {}\r\n",
-                self.cc
-                    .iter()
-                    .map(|a| a.full())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+        for addr in &self.cc {
+            builder = builder.cc(addr.full().parse()?);
         }
         if let Some(irt) = &self.in_reply_to {
-            email.push_str(&format!("In-Reply-To: {irt}\r\n"));
+            builder = builder.in_reply_to(irt.clone());
         }
-        email.push_str(&format!("Subject: {}\r\n", self.subject));
-        email.push_str("MIME-Version: 1.0\r\n");
-        email.push_str("Content-Type: text/plain; charset=utf-8\r\n");
-        email.push_str("\r\n");
-        email.push_str(&self.body.replace('\n', "\r\n"));
-        email
+        // Drafts can have no recipients; their envelope is never sent.
+        if saving_draft {
+            builder = builder.envelope(lettre::address::Envelope::new(None, vec![sender.email])?);
+        }
+        if self.attachments.is_empty() {
+            Ok(builder
+                .header(ContentType::TEXT_PLAIN)
+                .body(self.body.clone())?)
+        } else {
+            let mut parts = MultiPart::mixed().singlepart(SinglePart::plain(self.body.clone()));
+            for attachment in &self.attachments {
+                parts = parts.singlepart(attachment.mime_part()?);
+            }
+            Ok(builder.multipart(parts)?)
+        }
     }
 }
 
@@ -350,14 +351,14 @@ mod tests {
     #[test]
     fn draft_to_rfc2822_contains_message_id() {
         let text = "To: alice@x.com\nSubject: Hi\n--- body ---\nHello";
-        let rfc = Draft::parse(text).to_rfc2822("me@x.com");
+        let rfc = Draft::parse(text).to_rfc2822("me@x.com").unwrap();
         assert!(rfc.contains("Message-ID:"), "got: {rfc}");
     }
 
     #[test]
     fn draft_to_rfc2822_contains_required_headers() {
         let text = "To: alice@x.com\nCc: bob@x.com\nSubject: Hi\n--- body ---\nHello";
-        let rfc = Draft::parse(text).to_rfc2822("Me <me@x.com>");
+        let rfc = Draft::parse(text).to_rfc2822("Me <me@x.com>").unwrap();
         assert!(rfc.contains("From: Me <me@x.com>"), "got: {rfc}");
         assert!(rfc.contains("To: alice@x.com"), "got: {rfc}");
         assert!(rfc.contains("Cc: bob@x.com"), "got: {rfc}");
@@ -367,14 +368,14 @@ mod tests {
     #[test]
     fn draft_to_rfc2822_contains_body() {
         let text = "To: alice@x.com\nSubject: Hi\n--- body ---\nHello world";
-        let rfc = Draft::parse(text).to_rfc2822("me@x.com");
+        let rfc = Draft::parse(text).to_rfc2822("me@x.com").unwrap();
         assert!(rfc.contains("Hello world"), "got: {rfc}");
     }
 
     #[test]
     fn draft_to_rfc2822_includes_in_reply_to() {
         let text = "To: alice@x.com\nSubject: Re: Hi\nIn-Reply-To: <abc@x.com>\n--- body ---\n";
-        let rfc = Draft::parse(text).to_rfc2822("me@x.com");
+        let rfc = Draft::parse(text).to_rfc2822("me@x.com").unwrap();
         assert!(rfc.contains("In-Reply-To: <abc@x.com>"), "got: {rfc}");
     }
 
@@ -391,6 +392,35 @@ mod tests {
         ));
         std::fs::write(&path, content).unwrap();
         path
+    }
+
+    #[test]
+    fn mime_send_and_draft_preserve_binary_attachments() {
+        let path = write_tmp_email("temporary attachment");
+        std::fs::write(&path, [0, 1, 2, 255]).unwrap();
+        let attachment = Attachment::from_file(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let mut draft = Draft::parse("To: a@x.com\nSubject: Documents\n--- body ---\nHello");
+        draft.attachments.push(attachment.clone());
+        draft.attachments.push(attachment);
+        let bytes = draft
+            .build_message("Me <me@x.com>", false)
+            .unwrap()
+            .formatted();
+        let msg = mail_parser::MessageParser::default().parse(&bytes).unwrap();
+        assert_eq!(msg.body_text(0).unwrap(), "Hello");
+        let restored = Attachment::from_message(&msg);
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0].data, [0, 1, 2, 255]);
+        assert_eq!(restored[0].name, draft.attachments[0].name);
+        draft.to.clear();
+        assert!(draft.build_message("me@x.com", false).is_err());
+        let rfc = draft.to_rfc2822("Me <me@x.com>").unwrap();
+        let msg = mail_parser::MessageParser::default()
+            .parse(rfc.as_bytes())
+            .unwrap();
+        assert!(msg.to().is_none());
+        assert_eq!(Attachment::from_message(&msg)[1].data, [0, 1, 2, 255]);
     }
 
     #[test]
@@ -427,7 +457,7 @@ mod tests {
     #[test]
     fn email_to_draft_roundtrips_via_rfc2822() {
         let original = "To: alice@x.com\nSubject: Test\n--- body ---\nHi there";
-        let rfc = Draft::parse(original).to_rfc2822("me@x.com");
+        let rfc = Draft::parse(original).to_rfc2822("me@x.com").unwrap();
         let path = write_tmp_email(&rfc);
         let email = crate::core::thread::Email::from_file(&path).unwrap();
         let draft = email.to_draft().unwrap();

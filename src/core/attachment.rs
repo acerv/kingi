@@ -2,9 +2,10 @@
 // Copyright (C) 2026 Andrea Cervesato <andrea.cervesato@suse.com>
 use anyhow::{Context, Result, ensure};
 use mail_parser::{Message, MimeHeaders};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
+#[derive(Clone)]
 pub struct Attachment {
     pub name: String,
     pub data: Vec<u8>,
@@ -12,6 +13,43 @@ pub struct Attachment {
 }
 
 impl Attachment {
+    pub fn from_file(path: &Path) -> Result<Self> {
+        ensure!(
+            std::fs::metadata(path)
+                .with_context(|| format!("cannot inspect {}", path.display()))?
+                .is_file(),
+            "attachment must be a regular file"
+        );
+        let mut file =
+            std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+        ensure!(
+            file.metadata()?.is_file(),
+            "attachment must be a regular file"
+        );
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| !n.chars().any(char::is_control))
+            .ok_or_else(|| anyhow::anyhow!("invalid attachment filename"))?
+            .to_string();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)
+            .with_context(|| format!("cannot read {}", path.display()))?;
+        Ok(Self {
+            name,
+            data,
+            encoding_problem: false,
+        })
+    }
+
+    pub fn mime_part(&self) -> Result<lettre::message::SinglePart> {
+        ensure!(!self.encoding_problem, "attachment could not be decoded");
+        Ok(lettre::message::Attachment::new(self.name.clone()).body(
+            self.data.clone(),
+            lettre::message::header::ContentType::parse("application/octet-stream")?,
+        ))
+    }
+
     pub fn from_message(msg: &Message) -> Vec<Self> {
         msg.attachments()
             .enumerate()

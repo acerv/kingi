@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Andrea Cervesato <andrea.cervesato@suse.com>
 use super::compose::BODY_SENTINEL;
 use crate::core::address::AddressBook;
+use crate::core::attachment::Attachment;
 use edtui::{
     EditorEventHandler, EditorMode, EditorState, EditorStatusLine, EditorTheme, EditorView,
     Highlight, Index2, Lines, RowIndex,
@@ -119,6 +120,11 @@ pub struct Editor {
     focus: Focus,
     suggestions: Vec<String>,
     ac_selected: usize,
+    pub(super) attachments: Vec<Attachment>,
+    attachment_selected: Option<usize>,
+    attachment_path: Option<HeaderField>,
+    path_matches: Vec<String>,
+    path_selected: Option<usize>,
 }
 
 impl Editor {
@@ -157,11 +163,149 @@ impl Editor {
             focus: Focus::To,
             suggestions: Vec::new(),
             ac_selected: 0,
+            attachments: Vec::new(),
+            attachment_selected: None,
+            attachment_path: None,
+            path_matches: Vec::new(),
+            path_selected: None,
         }
     }
 
     pub fn title(&self) -> &str {
         &self.subject.value
+    }
+
+    pub fn draft(&self) -> super::compose::Draft {
+        let mut draft = super::compose::Draft::parse(&self.text());
+        draft.attachments = self.attachments.clone();
+        draft
+    }
+
+    pub fn attachment_key(&mut self, key: crossterm::event::KeyEvent) -> anyhow::Result<bool> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        if self.attachment_path.is_some() {
+            match key.code {
+                KeyCode::Esc => self.attachment_path = None,
+                KeyCode::Down => {
+                    if !self.path_matches.is_empty() {
+                        self.path_selected = Some(
+                            self.path_selected
+                                .map_or(0, |i| (i + 1).min(self.path_matches.len() - 1)),
+                        );
+                    }
+                }
+                KeyCode::Up => {
+                    self.path_selected = self.path_selected.and_then(|i| i.checked_sub(1));
+                }
+                KeyCode::Tab | KeyCode::Enter => {
+                    let selected = self.path_selected.or_else(|| {
+                        (key.code == KeyCode::Tab && !self.path_matches.is_empty()).then_some(0)
+                    });
+                    if let Some(i) = selected {
+                        self.attachment_path =
+                            Some(HeaderField::new("Path", &self.path_matches[i]));
+                    }
+                    let input = &self.attachment_path.as_ref().unwrap().value;
+                    let path = expand_path(input);
+                    if key.code == KeyCode::Enter && !path.is_dir() {
+                        self.attachments.push(Attachment::from_file(&path)?);
+                        self.attachment_selected = Some(self.attachments.len() - 1);
+                        self.attachment_path = None;
+                    } else if key.code == KeyCode::Enter && !input.ends_with('/') {
+                        self.attachment_path = Some(HeaderField::new("Path", &format!("{input}/")));
+                    }
+                    self.refresh_paths();
+                }
+                _ if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.attachment_path.as_mut().unwrap().on_key(key);
+                    self.refresh_paths();
+                }
+                _ => {}
+            }
+            return Ok(true);
+        }
+        if let Some(ref mut selected) = self.attachment_selected {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => self.attachment_selected = None,
+                KeyCode::Char('j') | KeyCode::Down => {
+                    *selected = (*selected + 1).min(self.attachments.len().saturating_sub(1));
+                }
+                KeyCode::Char('k') | KeyCode::Up => *selected = selected.saturating_sub(1),
+                KeyCode::Char('d') | KeyCode::Delete if !self.attachments.is_empty() => {
+                    self.attachments.remove(*selected);
+                    *selected = (*selected).min(self.attachments.len().saturating_sub(1));
+                }
+                KeyCode::Char('a') => {
+                    self.attachment_path = Some(HeaderField::new("Path", ""));
+                    self.refresh_paths();
+                }
+                _ => {}
+            }
+            return Ok(true);
+        }
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('a') {
+            self.suggestions.clear();
+            self.attachment_selected = Some(0);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn refresh_paths(&mut self) {
+        self.path_selected = None;
+        self.path_matches = self
+            .attachment_path
+            .as_ref()
+            .map(|field| complete_path(&field.value))
+            .unwrap_or_default();
+    }
+
+    fn draw_attachments(&self, frame: &mut ratatui::Frame) {
+        let Some(selected) = self.attachment_selected else {
+            return;
+        };
+        let labels = if self.attachments.is_empty() {
+            vec!["No attachments".to_string()]
+        } else {
+            self.attachments
+                .iter()
+                .map(|a| format!("{} ({} bytes)", a.name, a.data.len()))
+                .collect()
+        };
+        super::draw::draw_list_popup(
+            frame,
+            " Attachments — a: add, d: remove, Esc: close ",
+            &labels,
+            selected,
+        );
+        if let Some(field) = &self.attachment_path {
+            let area = frame.area();
+            let w = area.width.min(80);
+            let h = area.height.min(14);
+            let popup = Rect::new(
+                area.x + area.width.saturating_sub(w) / 2,
+                area.y + area.height.saturating_sub(h) / 2,
+                w,
+                h,
+            );
+            frame.render_widget(Clear, popup);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Attach file — Tab: complete, Enter: attach, Esc: cancel ");
+            let inner = block.inner(popup);
+            frame.render_widget(block, popup);
+            let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
+            draw_field(frame, chunks[0], field, true);
+            let mut state = ListState::default().with_selected(self.path_selected);
+            let list = List::new(self.path_matches.clone())
+                .highlight_style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("> ");
+            frame.render_stateful_widget(list, chunks[1], &mut state);
+        }
     }
 
     /// Handle a crossterm key event.
@@ -373,17 +517,72 @@ pub fn draw(frame: &mut ratatui::Frame, area: Rect, editor: &mut Editor) {
     // Layout: 3 header lines + 1 separator + body.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
         .split(inner);
 
     // Draw header fields.
     draw_header(frame, chunks[0], editor);
 
     // Draw body editor.
-    draw_body(frame, chunks[1], editor);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Attachments: {} (Ctrl+A to add/remove)",
+            editor.attachments.len()
+        ))
+        .style(Style::default().fg(Color::Cyan)),
+        chunks[1],
+    );
+    draw_body(frame, chunks[2], editor);
 
     // Draw autocomplete dropdown overlay.
     draw_autocomplete(frame, chunks[0], editor);
+    editor.draw_attachments(frame);
+}
+
+fn expand_path(input: &str) -> std::path::PathBuf {
+    if let Some(rest) = input.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return std::path::PathBuf::from(home).join(rest);
+    }
+    std::path::PathBuf::from(input)
+}
+
+fn complete_path(input: &str) -> Vec<String> {
+    let (prefix, fragment) = input
+        .rsplit_once('/')
+        .map_or(("", input), |(dir, name)| (&input[..dir.len() + 1], name));
+    let dir = if prefix.is_empty() {
+        std::path::PathBuf::from(".")
+    } else {
+        expand_path(prefix)
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut matches: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            if !name.starts_with(fragment) || name.chars().any(char::is_control) {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() && !metadata.is_dir() {
+                return None;
+            }
+            Some(format!(
+                "{prefix}{name}{}",
+                if metadata.is_dir() { "/" } else { "" }
+            ))
+        })
+        .collect();
+    matches.sort();
+    matches
 }
 
 fn draw_header(frame: &mut ratatui::Frame, area: Rect, editor: &Editor) {
@@ -576,6 +775,77 @@ mod tests {
 
     fn make_editor(draft: &str) -> Editor {
         Editor::new(draft)
+    }
+
+    #[test]
+    fn attachment_paths_complete_and_files_can_be_added_and_removed() {
+        let dir = std::env::temp_dir().join(format!(
+            "kingi-compose-attachment-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        let path = dir.join("docs/report ü.pdf");
+        std::fs::write(&path, [0, 1, 255]).unwrap();
+        let mut ed = Editor::new("To: a@x.com\nSubject: File\n--- body ---\nBody");
+        ed.attachment_key(ctrl(KeyCode::Char('a'))).unwrap();
+        ed.attachment_key(key(KeyCode::Char('a'))).unwrap();
+        ed.attachment_path = Some(HeaderField::new("Path", &format!("{}/do", dir.display())));
+        ed.refresh_paths();
+        assert_eq!(ed.path_matches, [format!("{}/docs/", dir.display())]);
+        ed.attachment_key(key(KeyCode::Tab)).unwrap();
+        assert!(
+            ed.attachment_path
+                .as_ref()
+                .unwrap()
+                .value
+                .ends_with("/docs/")
+        );
+        assert_eq!(ed.path_matches, [path.to_str().unwrap()]);
+        ed.attachment_key(key(KeyCode::Down)).unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, frame.area(), &mut ed))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(rendered.contains("report ü.pdf"));
+        ed.attachment_key(key(KeyCode::Enter)).unwrap();
+        assert!(ed.attachment_path.is_none());
+        assert_eq!(ed.attachments[0].name, "report ü.pdf");
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(ed.draft().attachments[0].data, [0, 1, 255]);
+        ed.attachment_key(key(KeyCode::Char('a'))).unwrap();
+        ed.attachment_path = Some(HeaderField::new("Path", path.to_str().unwrap()));
+        assert!(ed.attachment_key(key(KeyCode::Enter)).is_err());
+        assert!(ed.attachment_path.is_some());
+        assert_eq!(ed.attachments.len(), 1);
+        ed.attachment_key(key(KeyCode::Esc)).unwrap();
+        ed.attachment_key(key(KeyCode::Char('d'))).unwrap();
+        assert!(ed.attachments.is_empty());
+        ed.attachment_key(key(KeyCode::Esc)).unwrap();
+        assert!(!ed.attachment_key(key(KeyCode::Char('a'))).unwrap());
+        assert!(Attachment::from_file(&dir).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn path_completion_supports_relative_and_home_paths() {
+        let matches = complete_path("src/ui/edi");
+        assert!(matches.contains(&"src/ui/editor.rs".to_string()));
+        assert!(complete_path("src/u").contains(&"src/ui/".to_string()));
+        assert!(complete_path("/nonexistent-kingi-directory/").is_empty());
+        if let Some(home) = std::env::var_os("HOME") {
+            assert_eq!(
+                expand_path("~/file.pdf"),
+                std::path::PathBuf::from(home).join("file.pdf")
+            );
+            assert!(complete_path("~/").iter().all(|p| p.starts_with("~/")));
+        }
     }
 
     /// Build an editor focused on the body in Normal mode at the given row.

@@ -281,6 +281,8 @@ impl HelpView {
         ]);
 
         let compose_keys = vec![
+            ("Ctrl+A", "Attachments: a add, d remove, Esc close"),
+            ("Tab / ↑ / ↓", "Complete attachment path / select match"),
             ("Ctrl+Q", "Send dialog"),
             ("j/k", "Navigate dialog options"),
             ("Enter", "Confirm"),

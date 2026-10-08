@@ -501,6 +501,14 @@ impl App {
 
     fn handle_compose_tab_key(&mut self, key: KeyEvent, ei: usize) {
         if let Tab::Compose(ref mut ed, _) = self.tabs[ei] {
+            match ed.attachment_key(key) {
+                Ok(true) => return,
+                Err(err) => {
+                    self.status_error = Some(format!("{err:#}"));
+                    return;
+                }
+                Ok(false) => {}
+            }
             match (key.modifiers, key.code) {
                 (KeyModifiers::CONTROL, KeyCode::Char('q')) => {
                     let has_drafts = self.config.mailboxes.iter().any(|mb| mb.is_drafts());
@@ -555,38 +563,27 @@ impl App {
 
     fn execute_send_action(&mut self, action: &SendAction) {
         let ei = self.current_tab.saturating_sub(1);
-        let (text, kind_id) = if let Some(Tab::Compose(ed, kind)) = self.tabs.get(ei) {
+        let (draft, kind_id) = if let Some(Tab::Compose(ed, kind)) = self.tabs.get(ei) {
             let id = match kind {
                 ComposeKind::Reply(id) | ComposeKind::Forward(id) => Some(id.clone()),
                 ComposeKind::New => None,
             };
             let is_fwd = matches!(kind, ComposeKind::Forward(_));
-            (ed.text(), id.map(|i| (i, is_fwd)))
+            (ed.draft(), id.map(|i| (i, is_fwd)))
         } else {
             return;
         };
 
-        self.close_current_tab();
-
         match action {
             SendAction::Send => {
-                let draft = compose::Draft::parse(&text);
                 let mut addrs = draft.to.clone();
                 addrs.extend(draft.cc.clone());
                 self.address_book.harvest(&addrs);
-                let send_err = !draft.to.is_empty()
-                    && send_message(
-                        &self.config.smtp,
-                        &draft.to,
-                        &draft.cc,
-                        &draft.subject,
-                        &draft.body,
-                        draft.in_reply_to.as_deref(),
-                    )
-                    .is_err();
-                if send_err {
-                    self.status_error = Some("Failed to send email".to_string());
-                } else if let Some((id, is_fwd)) = kind_id {
+                if let Err(err) = send_message(&self.config.smtp, &draft) {
+                    self.status_error = Some(format!("{err:#}"));
+                    return;
+                }
+                if let Some((id, is_fwd)) = kind_id {
                     let flag = if is_fwd { Flag::Passed } else { Flag::Replied };
                     for md in &self.maildirs {
                         if let Some(thread) = md.find_by_id(&id) {
@@ -603,21 +600,35 @@ impl App {
                         self.config.smtp.name.as_deref().unwrap_or(""),
                         &self.config.smtp.username,
                     );
-                    let content = compose::Draft::parse(&text).to_rfc2822(&from.full());
+                    let content = match draft.to_rfc2822(&from.full()) {
+                        Ok(content) => content,
+                        Err(err) => {
+                            self.status_error = Some(format!("{err:#}"));
+                            return;
+                        }
+                    };
                     if let Some(md) = self.maildirs.get_mut(idx) {
                         if let Err(e) = md.write_email(&content) {
                             self.status_error = Some(format!("{e:#?}"));
+                            return;
                         } else {
                             let _ = md.sync();
                             if let Some(tv) = self.threads.get_mut(idx) {
                                 tv.invalidate();
                             }
                         }
+                    } else {
+                        self.status_error = Some("Drafts mailbox is unavailable".to_string());
+                        return;
                     }
+                } else {
+                    self.status_error = Some("No Drafts mailbox configured".to_string());
+                    return;
                 }
             }
             SendAction::Discard => {}
         }
+        self.close_current_tab();
     }
 
     fn handle_email_tab_key(&mut self, key: KeyEvent, ei: usize) {
@@ -920,8 +931,21 @@ impl App {
             .get(self.current_mb)
             .is_some_and(|mb| mb.is_drafts());
         if is_drafts {
-            match thread.parent.to_draft() {
-                Ok(draft) => self.open_editor(draft, ComposeKind::New),
+            let restored = thread.parent.to_draft().and_then(|draft| {
+                let msg = thread.parent.to_message()?;
+                Ok((
+                    draft,
+                    crate::core::attachment::Attachment::from_message(&msg),
+                ))
+            });
+            match restored {
+                Ok((draft, attachments)) => {
+                    let mut editor = Editor::new(&draft);
+                    editor.attachments = attachments;
+                    self.tabs
+                        .push(Tab::Compose(Box::new(editor), ComposeKind::New));
+                    self.current_tab = self.tabs.len();
+                }
                 Err(e) => self.status_error = Some(format!("{e:#?}")),
             }
         } else {
@@ -2082,6 +2106,44 @@ mod tests {
         );
         std::fs::write(&path, content).unwrap();
         path
+    }
+
+    #[test]
+    fn save_and_reopen_draft_keeps_attachments_and_failures_keep_editor() {
+        let dir = make_maildir_dir();
+        let file = dir.join("document.pdf");
+        std::fs::write(&file, [0, 1, 255]).unwrap();
+        let mut app = make_app_with_labeled_dirs(&["Drafts".to_string()], &[&dir]);
+        app.config.smtp.username = "me@x.com".to_string();
+        let mut editor = Editor::new("To: \nSubject: File\n--- body ---\nBody");
+        editor
+            .attachments
+            .push(crate::core::attachment::Attachment::from_file(&file).unwrap());
+        std::fs::remove_file(&file).unwrap();
+        app.tabs
+            .push(Tab::Compose(Box::new(editor), ComposeKind::New));
+        app.current_tab = 1;
+        // No recipients: message building fails before SMTP is contacted.
+        app.execute_send_action(&SendAction::Send);
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.status_error.is_some());
+        app.status_error = None;
+        app.execute_send_action(&SendAction::SaveDraft);
+        assert!(app.tabs.is_empty());
+        assert_eq!(app.maildirs[0].email_count(), 1);
+        app.open_selected_email();
+        let Some(Tab::Compose(ed, _)) = app.tabs.first() else {
+            panic!("draft not reopened")
+        };
+        assert_eq!(ed.attachments[0].name, "document.pdf");
+        assert_eq!(ed.attachments[0].data, [0, 1, 255]);
+        assert!(ed.text().contains("Body"));
+        // A save failure also leaves the complete editor available.
+        app.config.smtp.username.clear();
+        app.execute_send_action(&SendAction::SaveDraft);
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.status_error.is_some());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
