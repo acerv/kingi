@@ -42,16 +42,10 @@ impl EmailView {
     ) -> Result<Self> {
         let msg = email.to_message()?;
 
-        let message_id;
-        if let Some(id) = msg.message_id() {
-            if id.is_empty() {
-                return Err(anyhow::anyhow!("Message-ID is empty"));
-            }
-
-            message_id = id.to_string();
-        } else {
-            return Err(anyhow::anyhow!("Message-ID is None"));
-        }
+        // `Email` already resolved the Message-ID (synthesizing one when the
+        // header is missing), so reuse it to stay consistent with the thread
+        // list and tab lookups.
+        let message_id = email.message_id.clone();
 
         let from = parse_addr_list(msg.from());
         let to = parse_addr_list(msg.to());

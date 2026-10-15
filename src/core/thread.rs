@@ -38,6 +38,17 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+/// Suffix used for Message-IDs synthesized by kingi for emails lacking one.
+const SYNTHETIC_ID_DOMAIN: &str = "@kingi.invalid";
+
+/// Build a deterministic Message-ID from the raw email bytes.
+fn synthetic_message_id(bytes: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    format!("{:016x}{}", hasher.finish(), SYNTHETIC_ID_DOMAIN)
+}
+
 /// Email metadata that contains only the essential email information.
 /// This structure is used to parse emails from a MailDir folder and to reduce
 /// the overload caused by parsing multiple fields, such as body.
@@ -76,8 +87,12 @@ impl Email {
             None => return Err(anyhow::anyhow!("Can't parse headers")),
         };
         let id = match parsed.message_id() {
-            Some(id) => id.to_string(),
-            None => return Err(anyhow::anyhow!("No Message-ID")),
+            Some(id) if !id.trim().is_empty() => id.to_string(),
+            // Some senders (scripts, old clients) omit Message-ID entirely.
+            // Synthesize a stable one from the raw content so the email can
+            // still be threaded, looked up and de-duplicated. Hashing the
+            // content (not the path) keeps it stable across Maildir renames.
+            _ => synthetic_message_id(&bytes),
         };
         let timestamp = parsed.date().map(|d| d.to_timestamp());
         let from = parsed
@@ -108,6 +123,11 @@ impl Email {
             is_encrypted,
             path: RefCell::new(path.to_path_buf()),
         })
+    }
+
+    /// Whether `message_id` was synthesized because the email had none.
+    pub fn has_synthetic_id(&self) -> bool {
+        self.message_id.ends_with(SYNTHETIC_ID_DOMAIN)
     }
 
     /// Returns the on-disk path of this email file.
@@ -487,14 +507,29 @@ mod tests {
     }
 
     #[test]
-    fn from_file_error_on_missing_message_id() {
+    fn from_file_synthesizes_missing_message_id() {
         let dir = temp_dir();
         let path = dir.join("new").join("msg1");
-        write_file(
-            &path,
-            "From: test@example.com\r\nSubject: No ID\r\n\r\nBody\r\n",
-        );
-        assert!(Email::from_file(&path).is_err());
+        let content = "From: test@example.com\r\nSubject: No ID\r\n\r\nBody\r\n";
+        write_file(&path, content);
+        let email = Email::from_file(&path).unwrap();
+        assert!(email.has_synthetic_id());
+        assert!(!email.message_id.is_empty());
+        assert_eq!(email.subject, "No ID");
+
+        // Stable: same content in another file yields the same ID.
+        let path2 = dir.join("cur").join("msg2:2,S");
+        write_file(&path2, content);
+        assert_eq!(Email::from_file(&path2).unwrap().message_id, email.message_id);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_file_real_message_id_is_not_synthetic() {
+        let dir = temp_dir();
+        let path = dir.join("new").join("msg1");
+        write_file(&path, &minimal_email("id@test", None, "a@x.com", "Hi"));
+        assert!(!Email::from_file(&path).unwrap().has_synthetic_id());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

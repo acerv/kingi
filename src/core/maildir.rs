@@ -130,10 +130,9 @@ impl Maildir {
     pub fn insert(&mut self, path: &Path) -> bool {
         let email = match Email::from_file(&path.to_path_buf()) {
             Ok(e) => e,
-            Err(e) => {
-                eprintln!("kingi: failed to load {}: {}", path.display(), e);
-                return false;
-            }
+            // Don't print here: writing to stderr while the TUI owns the
+            // terminal corrupts the screen. Callers report the failure count.
+            Err(_) => return false,
         };
 
         // Skip if we already know this Message-ID (duplicate file).

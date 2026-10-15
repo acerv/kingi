@@ -259,12 +259,11 @@ fn reply_headers(email: &Email, msg: &mail_parser::Message, own_address: &str) -
         .collect::<Vec<_>>()
         .join(", ");
 
-    let mut headers = format!(
-        "To: {}\nSubject: {}\nIn-Reply-To: <{}>\n",
-        recipient.full(),
-        reply_subject,
-        email.message_id
-    );
+    let mut headers = format!("To: {}\nSubject: {}\n", recipient.full(), reply_subject);
+    // Never reference a kingi-synthesized ID: it means nothing to others.
+    if !email.has_synthetic_id() {
+        headers.push_str(&format!("In-Reply-To: <{}>\n", email.message_id));
+    }
 
     if !cc.is_empty() {
         headers.push_str(&format!("Cc: {}\n", cc));
