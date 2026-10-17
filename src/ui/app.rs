@@ -304,9 +304,7 @@ impl App {
     /// Handle a key event. Returns `false` when the app should quit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
         if self.status_error.is_some() {
-            if key.code == KeyCode::Esc || key.code == KeyCode::Enter {
-                self.status_error = None;
-            }
+            self.status_error = None;
             return true;
         }
 
@@ -1550,6 +1548,45 @@ mod tests {
     }
 
     // ── main view ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn status_error_dismissed_by_esc() {
+        let mut app = make_app(vec![mb("Inbox", "/inbox")]);
+        app.status_error = Some("connection error".to_string());
+        assert!(app.handle_key(key(KeyCode::Esc)));
+        assert!(app.status_error.is_none());
+    }
+
+    #[test]
+    fn status_error_dismissed_by_enter() {
+        let mut app = make_app(vec![mb("Inbox", "/inbox")]);
+        app.status_error = Some("connection error".to_string());
+        assert!(app.handle_key(key(KeyCode::Enter)));
+        assert!(app.status_error.is_none());
+    }
+
+    #[test]
+    fn status_error_dismissed_by_any_key_without_side_effects() {
+        let mut app = make_app(vec![mb("Inbox", "/inbox")]);
+        app.status_error = Some("connection error".to_string());
+        // Pressing 'C' dismisses the modal error without opening a compose tab.
+        assert!(app.handle_key(key(KeyCode::Char('C'))));
+        assert!(app.status_error.is_none());
+        assert!(app.tabs.is_empty());
+        // Pressing 'C' a second time now opens the compose tab.
+        assert!(app.handle_key(key(KeyCode::Char('C'))));
+        assert_eq!(app.tabs.len(), 1);
+        assert!(matches!(app.tabs[0], Tab::Compose(_, _)));
+    }
+
+    #[test]
+    fn status_error_dismissed_by_q_without_quitting() {
+        let mut app = make_app(vec![mb("Inbox", "/inbox")]);
+        app.status_error = Some("connection error".to_string());
+        assert!(app.handle_key(key(KeyCode::Char('Q'))));
+        assert!(app.status_error.is_none());
+        assert!(!app.handle_key(key(KeyCode::Char('Q'))));
+    }
 
     #[test]
     fn capital_q_in_main_quits() {

@@ -317,6 +317,10 @@ fn draw_error_popup(frame: &mut ratatui::Frame, app: &App) {
             .title(Span::styled(
                 " Error ",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ))
+            .title_bottom(Span::styled(
+                " Press any key to dismiss ",
+                Style::default().fg(Color::DarkGray),
             ));
 
         let paragraph = Paragraph::new(err.as_str())
