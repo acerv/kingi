@@ -81,6 +81,7 @@ pub struct App {
     pub(super) current_mb: usize,
     pending_sync: Option<PendingSync>,
     pub(super) sync_error: Option<String>,
+    sending: bool,
     pub(super) search: SearchMode,
     pub(super) sender_search: SearchMode,
     pub(super) last_search: LastSearch,
@@ -176,6 +177,7 @@ impl App {
             current_mb: 0,
             pending_sync: None,
             sync_error: None,
+            sending: false,
             search: SearchMode::Off,
             sender_search: SearchMode::Off,
             last_search: LastSearch::Subject,
@@ -597,7 +599,14 @@ impl App {
                 let mut addrs = draft.to.clone();
                 addrs.extend(draft.cc.clone());
                 self.address_book.harvest(&addrs);
-                if let Err(err) = send_message(&self.config.smtp, &draft) {
+                self.sending = true;
+                if let Some(mut terminal) = self.terminal.take() {
+                    let _ = terminal.draw(|frame| draw::draw(frame, self));
+                    self.terminal = Some(terminal);
+                }
+                let res = send_message(&self.config.smtp, &draft);
+                self.sending = false;
+                if let Err(err) = res {
                     self.status_error = Some(format!("{err:#}"));
                     return;
                 }
@@ -906,6 +915,10 @@ impl App {
 
     pub fn is_syncing(&self) -> bool {
         self.pending_sync.is_some()
+    }
+
+    pub fn is_sending(&self) -> bool {
+        self.sending
     }
 
     fn trigger_sync(&mut self, is_manual: bool) {
@@ -1591,6 +1604,7 @@ mod tests {
             current_mb: 0,
             pending_sync: None,
             sync_error: None,
+            sending: false,
             search: SearchMode::Off,
             sender_search: SearchMode::Off,
             last_search: LastSearch::Subject,
@@ -2289,6 +2303,7 @@ mod tests {
             current_mb: 0,
             pending_sync: None,
             sync_error: None,
+            sending: false,
             search: SearchMode::Off,
             sender_search: SearchMode::Off,
             last_search: LastSearch::Subject,
