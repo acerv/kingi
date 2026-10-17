@@ -64,6 +64,11 @@ pub(super) enum Tab {
     Compose(Box<Editor>, ComposeKind),
 }
 
+pub(super) struct PendingSync {
+    pub(super) rx: mpsc::Receiver<Option<String>>,
+    pub(super) is_manual: bool,
+}
+
 pub struct App {
     pub(super) config: Config,
     pub(super) sidebar_state: ListState,
@@ -73,7 +78,8 @@ pub struct App {
     pub(super) tabs: Vec<Tab>,
     pub(super) current_tab: usize,
     pub(super) current_mb: usize,
-    pending_sync: Option<mpsc::Receiver<Option<String>>>,
+    pending_sync: Option<PendingSync>,
+    pub(super) sync_error: Option<String>,
     pub(super) search: SearchMode,
     pub(super) sender_search: SearchMode,
     pub(super) last_search: LastSearch,
@@ -168,6 +174,7 @@ impl App {
             current_tab: 0,
             current_mb: 0,
             pending_sync: None,
+            sync_error: None,
             search: SearchMode::Off,
             sender_search: SearchMode::Off,
             last_search: LastSearch::Subject,
@@ -193,87 +200,14 @@ impl App {
         };
 
         loop {
-            // Check if pending sync completed (non-blocking)
-            if let Some(ref rx) = self.pending_sync {
-                match rx.try_recv() {
-                    Ok(None) => {
-                        // Success — snapshot counts before syncing
-                        let counts_before: Vec<usize> =
-                            self.maildirs.iter().map(|md| md.email_count()).collect();
-                        let mut total_failed = 0;
-                        for maildir in &mut self.maildirs {
-                            total_failed += maildir.sync();
-                        }
-                        for tv in &mut self.threads {
-                            tv.invalidate();
-                        }
-                        // Notify per mailbox if new emails arrived
-                        for (i, md) in self.maildirs.iter().enumerate() {
-                            let new_total = md.email_count();
-                            let diff = new_total.saturating_sub(counts_before[i]);
-                            if diff > 0 {
-                                let label = &self.config.mailboxes[i].label;
-                                let body = format!(
-                                    "{diff} new email{} in {label}",
-                                    if diff == 1 { "" } else { "s" }
-                                );
-                                let icon = resolve_notification_icon(&[
-                                    "mail-message",
-                                    "mail-message-symbolic",
-                                    "mail-unread",
-                                    "mail-unread-symbolic",
-                                ]);
-                                let _ = notify_rust::Notification::new()
-                                    .summary("kingi")
-                                    .body(&body)
-                                    .icon(&icon)
-                                    .show();
-                            }
-                        }
-                        if total_failed > 0 {
-                            self.status_error =
-                                Some(format!("{} email(s) failed to load", total_failed));
-                        } else {
-                            self.status_error = None;
-                        }
-                        self.pending_sync = None;
-                        last_sync = Instant::now();
-                    }
-                    Ok(Some(err)) => {
-                        // Failed - still refresh UI to show current state
-                        let mut total_failed = 0;
-                        for maildir in &mut self.maildirs {
-                            total_failed += maildir.sync();
-                        }
-                        for tv in &mut self.threads {
-                            tv.invalidate();
-                        }
-                        if total_failed > 0 {
-                            self.status_error = Some(format!(
-                                "sync: {}; {} email(s) failed to load",
-                                err, total_failed
-                            ));
-                        } else {
-                            self.status_error = Some(format!("sync: {err:#?}"));
-                        }
-                        self.pending_sync = None;
-                        last_sync = Instant::now();
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {
-                        // Still running, continue
-                    }
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        // Thread panicked or dropped
-                        self.pending_sync = None;
-                        last_sync = Instant::now();
-                    }
+            if self.pending_sync.is_some() {
+                if self.poll_sync() {
+                    last_sync = Instant::now();
                 }
-            } else {
-                if let Some(i) = interval
-                    && last_sync.elapsed() >= i
-                {
-                    self.trigger_sync();
-                }
+            } else if let Some(i) = interval
+                && last_sync.elapsed() >= i
+            {
+                self.trigger_sync(false);
             }
 
             let mut terminal = self.terminal.take().unwrap();
@@ -299,6 +233,91 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Check if a pending sync has completed. Returns `true` when the sync finished.
+    pub(super) fn poll_sync(&mut self) -> bool {
+        let Some(ref pending) = self.pending_sync else {
+            return false;
+        };
+        match pending.rx.try_recv() {
+            Ok(None) => {
+                let is_manual = pending.is_manual;
+                // Success — snapshot counts before syncing
+                let counts_before: Vec<usize> =
+                    self.maildirs.iter().map(|md| md.email_count()).collect();
+                let mut total_failed = 0;
+                for maildir in &mut self.maildirs {
+                    total_failed += maildir.sync();
+                }
+                for tv in &mut self.threads {
+                    tv.invalidate();
+                }
+                // Notify per mailbox if new emails arrived
+                for (i, md) in self.maildirs.iter().enumerate() {
+                    let new_total = md.email_count();
+                    let diff = new_total.saturating_sub(counts_before[i]);
+                    if diff > 0 {
+                        let label = &self.config.mailboxes[i].label;
+                        let body = format!(
+                            "{diff} new email{} in {label}",
+                            if diff == 1 { "" } else { "s" }
+                        );
+                        let icon = resolve_notification_icon(&[
+                            "mail-message",
+                            "mail-message-symbolic",
+                            "mail-unread",
+                            "mail-unread-symbolic",
+                        ]);
+                        let _ = notify_rust::Notification::new()
+                            .summary("kingi")
+                            .body(&body)
+                            .icon(&icon)
+                            .show();
+                    }
+                }
+                self.sync_error = None;
+                if total_failed > 0 {
+                    let msg = format!("{total_failed} email(s) failed to load");
+                    if is_manual {
+                        self.status_error = Some(msg);
+                    } else {
+                        self.sync_error = Some(msg);
+                    }
+                } else if is_manual {
+                    self.status_error = None;
+                }
+                self.pending_sync = None;
+                true
+            }
+            Ok(Some(err)) => {
+                let is_manual = pending.is_manual;
+                // Failed - still refresh UI to show current state
+                let mut total_failed = 0;
+                for maildir in &mut self.maildirs {
+                    total_failed += maildir.sync();
+                }
+                for tv in &mut self.threads {
+                    tv.invalidate();
+                }
+                let msg = if total_failed > 0 {
+                    format!("sync: {err}; {total_failed} email(s) failed to load")
+                } else {
+                    format!("sync: {err}")
+                };
+                if is_manual {
+                    self.status_error = Some(msg.clone());
+                }
+                self.sync_error = Some(msg);
+                self.pending_sync = None;
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => false,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.pending_sync = None;
+                true
+            }
+        }
     }
 
     /// Handle a key event. Returns `false` when the app should quit.
@@ -357,7 +376,7 @@ impl App {
     fn handle_main_key(&mut self, key: KeyEvent) -> bool {
         match (key.modifiers, key.code) {
             (_, KeyCode::Char('Q')) => return false,
-            (KeyModifiers::CONTROL, KeyCode::Char('s')) => self.trigger_sync(),
+            (KeyModifiers::CONTROL, KeyCode::Char('s')) => self.trigger_sync(true),
             (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
                 if let Some(tv) = self.threads.get(self.current_mb) {
                     tv.mark_all_read();
@@ -642,6 +661,7 @@ impl App {
         }
         match (key.modifiers, key.code) {
             (_, KeyCode::Char('q')) => self.close_current_tab(),
+            (KeyModifiers::CONTROL, KeyCode::Char('s')) => self.trigger_sync(true),
             (_, KeyCode::Char('J')) => {
                 if let Some(tv) = self.threads.get_mut(self.current_mb) {
                     tv.next_email(1);
@@ -883,8 +903,15 @@ impl App {
         self.close_current_tab();
     }
 
-    fn trigger_sync(&mut self) {
-        if self.pending_sync.is_some() {
+    pub fn is_syncing(&self) -> bool {
+        self.pending_sync.is_some()
+    }
+
+    fn trigger_sync(&mut self, is_manual: bool) {
+        if let Some(ref mut pending) = self.pending_sync {
+            if is_manual {
+                pending.is_manual = true;
+            }
             return;
         }
 
@@ -892,7 +919,7 @@ impl App {
             let (tx, rx) = mpsc::channel();
             let cmd = sync_cfg.command.clone();
 
-            self.pending_sync = Some(rx);
+            self.pending_sync = Some(PendingSync { rx, is_manual });
 
             std::thread::spawn(move || {
                 let result = match std::process::Command::new("sh").args(["-c", &cmd]).output() {
@@ -1486,6 +1513,7 @@ mod tests {
             current_tab: 0,
             current_mb: 0,
             pending_sync: None,
+            sync_error: None,
             search: SearchMode::Off,
             sender_search: SearchMode::Off,
             last_search: LastSearch::Subject,
@@ -1586,6 +1614,48 @@ mod tests {
         assert!(app.handle_key(key(KeyCode::Char('Q'))));
         assert!(app.status_error.is_none());
         assert!(!app.handle_key(key(KeyCode::Char('Q'))));
+    }
+
+    #[test]
+    fn sync_failure_allows_subsequent_sync_and_manual_upgrade() {
+        let mut app = make_app(vec![mb("Inbox", "/inbox")]);
+        app.config.sync = Some(config::Sync {
+            command: "echo 'network unreachable' >&2; exit 1".to_string(),
+            interval: 60,
+        });
+
+        // Background sync fails -> sets sync_error, not status_error.
+        app.trigger_sync(false);
+        while !app.poll_sync() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.status_error.is_none());
+        assert_eq!(app.sync_error.as_deref(), Some("sync: network unreachable"));
+
+        // Background sync upgraded to manual via Ctrl+S while in flight sets status_error.
+        let (tx, rx) = mpsc::channel();
+        app.pending_sync = Some(PendingSync {
+            rx,
+            is_manual: false,
+        });
+        app.handle_key(ctrl(KeyCode::Char('s')));
+        assert!(app.pending_sync.as_ref().unwrap().is_manual);
+        tx.send(Some("offline".to_string())).unwrap();
+        assert!(app.poll_sync());
+        assert_eq!(app.status_error.as_deref(), Some("sync: offline"));
+        app.status_error = None;
+
+        // Subsequent sync succeeds once connection recovers -> clears sync_error.
+        app.config.sync = Some(config::Sync {
+            command: "true".to_string(),
+            interval: 60,
+        });
+        app.trigger_sync(true);
+        while !app.poll_sync() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.sync_error.is_none());
+        assert!(app.status_error.is_none());
     }
 
     #[test]
@@ -2118,6 +2188,7 @@ mod tests {
             current_tab: 0,
             current_mb: 0,
             pending_sync: None,
+            sync_error: None,
             search: SearchMode::Off,
             sender_search: SearchMode::Off,
             last_search: LastSearch::Subject,

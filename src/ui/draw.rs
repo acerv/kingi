@@ -206,10 +206,33 @@ fn draw_statusbar(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: 
                 ));
             }
         }
+        if app.is_syncing() {
+            spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled("syncing...", Style::default().fg(Color::Cyan)));
+        } else if let Some(ref err) = app.sync_error {
+            spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                utils::truncate_string(err, 40),
+                Style::default().fg(Color::Red),
+            ));
+        }
         Paragraph::new(Line::from(spans))
     } else {
-        Paragraph::new(" j/k scroll  J/K email  r reply  R reply+quote  a attachments  q close")
-            .style(Style::default().fg(Color::DarkGray))
+        let mut spans = vec![Span::styled(
+            " j/k scroll  J/K email  r reply  R reply+quote  a attachments  q close",
+            Style::default().fg(Color::DarkGray),
+        )];
+        if app.is_syncing() {
+            spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled("syncing...", Style::default().fg(Color::Cyan)));
+        } else if let Some(ref err) = app.sync_error {
+            spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                utils::truncate_string(err, 40),
+                Style::default().fg(Color::Red),
+            ));
+        }
+        Paragraph::new(Line::from(spans))
     };
     frame.render_widget(widget, area);
 }
