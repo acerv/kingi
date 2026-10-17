@@ -23,6 +23,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const POLLING_TIME: u64 = 5;
+const SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) enum SearchMode {
     Off,
@@ -922,19 +923,7 @@ impl App {
             self.pending_sync = Some(PendingSync { rx, is_manual });
 
             std::thread::spawn(move || {
-                let result = match std::process::Command::new("sh").args(["-c", &cmd]).output() {
-                    Ok(output) if output.status.success() => None,
-                    Ok(output) => {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        let code = output.status.code().unwrap_or(-1);
-                        Some(if stderr.is_empty() {
-                            format!("exit {}", code)
-                        } else {
-                            stderr.trim().to_string()
-                        })
-                    }
-                    Err(e) => Some(e.to_string()),
-                };
+                let result = run_sync_command(&cmd, SYNC_TIMEOUT);
                 let _ = tx.send(result);
             });
         }
@@ -1417,6 +1406,94 @@ fn spawn_copy(cmd: &str, args: &[&str], text: &str) -> std::io::Result<()> {
     }
 }
 
+/// Run a shell sync command with a timeout, killing the entire process group
+/// on timeout so hung sync processes (e.g. `mbsync`) do not stay alive holding
+/// maildir locks.
+fn run_sync_command(cmd: &str, timeout: Duration) -> Option<String> {
+    use std::process::{Command, Stdio};
+
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", cmd])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => return Some(e.to_string()),
+    };
+
+    let stderr_handle = child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            let _ = stderr.read_to_end(&mut buf);
+            buf
+        })
+    });
+
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stderr_bytes = stderr_handle
+                    .and_then(|h| h.join().ok())
+                    .unwrap_or_default();
+                if status.success() {
+                    return None;
+                }
+                let stderr = String::from_utf8_lossy(&stderr_bytes);
+                let trimmed = stderr.trim();
+                let code = status.code().unwrap_or(-1);
+                return Some(if trimmed.is_empty() {
+                    format!("exit {code}")
+                } else {
+                    trimmed.to_string()
+                });
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    #[cfg(unix)]
+                    {
+                        let pgid = child.id();
+                        let _ = Command::new("sh")
+                            .args(["-c", &format!("kill -9 -{pgid}")])
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .status();
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    if let Some(h) = stderr_handle {
+                        let _ = h.join();
+                    }
+                    return Some(format!(
+                        "sync timed out after {} seconds",
+                        timeout.as_secs()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                if let Some(h) = stderr_handle {
+                    let _ = h.join();
+                }
+                return Some(e.to_string());
+            }
+        }
+    }
+}
+
 /// Returns the first icon name from `candidates` that can be found in common
 /// freedesktop icon directories, or the last candidate as a final fallback.
 fn resolve_notification_icon(candidates: &[&str]) -> String {
@@ -1614,6 +1691,29 @@ mod tests {
         assert!(app.handle_key(key(KeyCode::Char('Q'))));
         assert!(app.status_error.is_none());
         assert!(!app.handle_key(key(KeyCode::Char('Q'))));
+    }
+
+    #[test]
+    fn run_sync_command_kills_timed_out_child_process_group() {
+        let dir = make_maildir_dir();
+        let marker = dir.join("leaked");
+        // Spawn a subshell/child that would create `marker` after 500ms if not killed.
+        let cmd = format!(
+            "sh -c 'sleep 0.5; touch {}' & wait",
+            marker.to_str().unwrap()
+        );
+        let res = run_sync_command(&cmd, Duration::from_millis(100));
+        assert!(
+            res.as_deref()
+                .is_some_and(|s| s.starts_with("sync timed out")),
+            "got: {res:?}"
+        );
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(
+            !marker.exists(),
+            "timed-out sync child process was not killed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
