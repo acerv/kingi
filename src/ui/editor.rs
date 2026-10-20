@@ -87,17 +87,49 @@ impl HeaderField {
         }
     }
 
-    /// The query fragment for autocomplete: text after the last comma.
+    /// Find the byte index of the last comma that separates two addresses
+    /// (ignoring commas inside quotes, angle brackets, or unquoted display names).
+    fn last_separator_comma(&self) -> Option<usize> {
+        let mut depth = 0u32;
+        let mut in_quotes = false;
+        let mut escaped = false;
+        let mut has_addr = false;
+        let mut last_comma = None;
+
+        for (i, ch) in self.value.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' if in_quotes => escaped = true,
+                '"' => in_quotes = !in_quotes,
+                '<' if !in_quotes => depth += 1,
+                '>' if !in_quotes => {
+                    depth = depth.saturating_sub(1);
+                    has_addr = true;
+                }
+                '@' if !in_quotes => has_addr = true,
+                ',' if depth == 0 && !in_quotes && has_addr => {
+                    last_comma = Some(i);
+                    has_addr = false;
+                }
+                _ => {}
+            }
+        }
+        last_comma
+    }
+
+    /// The query fragment for autocomplete: text after the last address-separating comma.
     fn current_fragment(&self) -> &str {
-        self.value
-            .rfind(',')
+        self.last_separator_comma()
             .map(|i| self.value[i + 1..].trim_start())
             .unwrap_or(self.value.trim())
     }
 
     /// Replace the fragment being typed with `addr` and append `, ` for the next entry.
     fn accept_suggestion(&mut self, addr: &str) {
-        if let Some(comma_pos) = self.value.rfind(',') {
+        if let Some(comma_pos) = self.last_separator_comma() {
             self.value.truncate(comma_pos + 1);
             self.value.push(' ');
         } else {
@@ -1214,6 +1246,15 @@ mod tests {
         ed.on_key(key(KeyCode::Enter));
         assert!(ed.to.value.starts_with("bob@x.com,"));
         assert!(ed.to.value.contains("alice@x.com"));
+    }
+
+    #[test]
+    fn accept_suggestion_preserves_display_name_with_comma() {
+        let mut ed = make_editor("To: Doe, John <john@x.com>, ali\nSubject: \n--- body ---\n");
+        ed.suggestions = vec!["alice@x.com".to_string()];
+        ed.ac_selected = 0;
+        ed.on_key(key(KeyCode::Enter));
+        assert_eq!(ed.to.value, "Doe, John <john@x.com>, alice@x.com, ");
     }
 
     #[test]

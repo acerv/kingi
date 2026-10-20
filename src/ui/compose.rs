@@ -65,16 +65,17 @@ impl Draft {
 
     pub fn build_message(&self, from: &str, saving_draft: bool) -> Result<lettre::Message> {
         use lettre::message::{MultiPart, SinglePart, header::ContentType};
-        let sender: lettre::message::Mailbox = from.parse()?;
+        let from_addr: Address = from.parse().unwrap();
+        let sender = addr_to_mailbox(&from_addr)?;
         let mut builder = lettre::Message::builder()
             .from(sender.clone())
             .subject(&self.subject)
             .message_id(None);
         for addr in &self.to {
-            builder = builder.to(addr.full().parse()?);
+            builder = builder.to(addr_to_mailbox(addr)?);
         }
         for addr in &self.cc {
-            builder = builder.cc(addr.full().parse()?);
+            builder = builder.cc(addr_to_mailbox(addr)?);
         }
         if let Some(irt) = &self.in_reply_to {
             builder = builder.in_reply_to(irt.clone());
@@ -95,6 +96,14 @@ impl Draft {
             Ok(builder.multipart(parts)?)
         }
     }
+}
+
+/// Convert an `Address` into a `lettre::message::Mailbox` without going through
+/// `Mailbox::from_str`, which rejects unquoted commas or punctuation in display names.
+fn addr_to_mailbox(addr: &Address) -> Result<lettre::message::Mailbox> {
+    let name = (!addr.name().is_empty()).then(|| addr.name().to_string());
+    let email: lettre::Address = addr.address().parse()?;
+    Ok(lettre::message::Mailbox::new(name, email))
 }
 
 /// Generate a compose draft for a new email from scratch.
@@ -376,6 +385,34 @@ mod tests {
         let text = "To: alice@x.com\nSubject: Re: Hi\nIn-Reply-To: <abc@x.com>\n--- body ---\n";
         let rfc = Draft::parse(text).to_rfc2822("me@x.com").unwrap();
         assert!(rfc.contains("In-Reply-To: <abc@x.com>"), "got: {rfc}");
+    }
+
+    #[test]
+    fn build_message_handles_display_names_with_commas_and_punctuation() {
+        let text = "To: Doe, John <john@x.com>, Alice (SUSE) <alice@x.com>\nCc: Bob, Jr. <bob@x.com>\nSubject: Re: Hi\n--- body ---\nHello";
+        let draft = Draft::parse(text);
+        assert_eq!(draft.to.len(), 2);
+        assert_eq!(draft.to[0].name(), "Doe, John");
+        assert_eq!(draft.to[0].address(), "john@x.com");
+        assert_eq!(draft.to[1].name(), "Alice (SUSE)");
+        assert_eq!(draft.to[1].address(), "alice@x.com");
+        assert_eq!(draft.cc.len(), 1);
+        assert_eq!(draft.cc[0].name(), "Bob, Jr.");
+
+        let msg = draft.build_message("Surname, Me <me@x.com>", false).unwrap();
+        let rfc = String::from_utf8(msg.formatted()).unwrap();
+        let parsed = mail_parser::MessageParser::default()
+            .parse(rfc.as_bytes())
+            .unwrap();
+        let to: Vec<_> = parsed.to().unwrap().iter().collect();
+        assert_eq!(to.len(), 2);
+        assert_eq!(to[0].name(), Some("Doe, John"));
+        assert_eq!(to[0].address(), Some("john@x.com"));
+        assert_eq!(to[1].name(), Some("Alice (SUSE)"));
+        assert_eq!(to[1].address(), Some("alice@x.com"));
+
+        let draft_rfc = draft.to_rfc2822("Surname, Me <me@x.com>").unwrap();
+        assert!(draft_rfc.contains("john@x.com"), "got: {draft_rfc}");
     }
 
     // ── email_to_draft ──────────────────────────────────────────────────────

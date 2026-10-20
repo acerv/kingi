@@ -18,7 +18,6 @@ impl Address {
         }
     }
 
-    #[cfg(test)]
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -47,29 +46,52 @@ impl Address {
     }
 
     /// Split a comma-separated address list into individual `Address` values,
-    /// respecting angle brackets so that `"Doe, John <j@x.com>, alice@x.com"`
-    /// splits into two entries rather than three.
+    /// respecting angle brackets, quotes, and display names containing commas
+    /// so that `"Doe, John <j@x.com>, alice@x.com"` splits into two entries
+    /// rather than three.
     pub fn parse_list(list: &str) -> Vec<Self> {
         let mut result = Vec::new();
         let mut current = String::new();
         let mut depth = 0u32;
+        let mut in_quotes = false;
+        let mut escaped = false;
+        let mut has_addr = false;
 
         for ch in list.chars() {
+            if escaped {
+                escaped = false;
+                current.push(ch);
+                continue;
+            }
             match ch {
-                '<' => {
+                '\\' if in_quotes => {
+                    escaped = true;
+                    current.push(ch);
+                }
+                '"' => {
+                    in_quotes = !in_quotes;
+                    current.push(ch);
+                }
+                '<' if !in_quotes => {
                     depth += 1;
                     current.push(ch);
                 }
-                '>' => {
+                '>' if !in_quotes => {
                     depth = depth.saturating_sub(1);
+                    has_addr = true;
                     current.push(ch);
                 }
-                ',' if depth == 0 => {
+                '@' if !in_quotes => {
+                    has_addr = true;
+                    current.push(ch);
+                }
+                ',' if depth == 0 && !in_quotes && has_addr => {
                     let t = current.trim().to_string();
                     if !t.is_empty() {
                         result.push(t.parse::<Address>().unwrap());
                     }
                     current.clear();
+                    has_addr = false;
                 }
                 _ => current.push(ch),
             }
@@ -108,16 +130,35 @@ impl std::str::FromStr for Address {
             return Ok(Self::default());
         }
 
-        if let Some(start) = s.find('<')
+        if let Some(start) = s.rfind('<')
             && let Some(end) = s[start..].find('>')
         {
             let addr = s[start + 1..start + end].trim();
-            let name = s[..start].trim();
-            return Ok(Self::new(name, addr));
+            let name = unquote_name(s[..start].trim());
+            return Ok(Self::new(&name, addr));
         }
 
         // Bare address (no angle brackets)
         Ok(Self::new("", s))
+    }
+}
+
+fn unquote_name(s: &str) -> String {
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        let mut out = String::with_capacity(s.len() - 2);
+        let mut chars = s[1..s.len() - 1].chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    } else {
+        s.to_string()
     }
 }
 
@@ -320,6 +361,24 @@ mod tests {
         assert_eq!(addrs.len(), 2);
         assert_eq!(addrs[0].name(), "John Doe");
         assert_eq!(addrs[0].address(), "john@x.com");
+        assert_eq!(addrs[1].address(), "alice@x.com");
+    }
+
+    #[test]
+    fn split_preserves_name_with_comma() {
+        let addrs = Address::parse_list("Doe, John <j@x.com>, alice@x.com");
+        assert_eq!(addrs.len(), 2);
+        assert_eq!(addrs[0].name(), "Doe, John");
+        assert_eq!(addrs[0].address(), "j@x.com");
+        assert_eq!(addrs[1].address(), "alice@x.com");
+    }
+
+    #[test]
+    fn split_preserves_quoted_name_with_comma() {
+        let addrs = Address::parse_list("\"Doe, John\" <j@x.com>, alice@x.com");
+        assert_eq!(addrs.len(), 2);
+        assert_eq!(addrs[0].name(), "Doe, John");
+        assert_eq!(addrs[0].address(), "j@x.com");
         assert_eq!(addrs[1].address(), "alice@x.com");
     }
 
