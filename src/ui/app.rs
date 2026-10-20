@@ -11,6 +11,7 @@ use crate::ui::email::EmailView;
 use crate::ui::help::{HelpAction, HelpView};
 use crate::ui::send::{SendAction, send_message};
 use crate::ui::threads::ThreadsView;
+use crate::ui::utils;
 use arboard::Clipboard;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
@@ -24,6 +25,8 @@ use std::time::{Duration, Instant};
 
 const POLLING_TIME: u64 = 5;
 const SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_NOTIFICATION_EMAILS: usize = 5;
+const MAX_NOTIFICATION_SUBJECT_LEN: usize = 40;
 
 pub(super) enum SearchMode {
     Off,
@@ -246,26 +249,22 @@ impl App {
         match pending.rx.try_recv() {
             Ok(None) => {
                 let is_manual = pending.is_manual;
-                // Success — snapshot counts before syncing
-                let counts_before: Vec<usize> =
-                    self.maildirs.iter().map(|md| md.email_count()).collect();
                 let mut total_failed = 0;
+                let mut new_per_mailbox: Vec<Vec<Email>> =
+                    Vec::with_capacity(self.maildirs.len());
                 for maildir in &mut self.maildirs {
-                    total_failed += maildir.sync();
+                    let (failed, new_emails) = maildir.sync_new();
+                    total_failed += failed;
+                    new_per_mailbox.push(new_emails);
                 }
                 for tv in &mut self.threads {
                     tv.invalidate();
                 }
                 // Notify per mailbox if new emails arrived
-                for (i, md) in self.maildirs.iter().enumerate() {
-                    let new_total = md.email_count();
-                    let diff = new_total.saturating_sub(counts_before[i]);
-                    if diff > 0 {
+                for (i, new_emails) in new_per_mailbox.iter().enumerate() {
+                    if !new_emails.is_empty() {
                         let label = &self.config.mailboxes[i].label;
-                        let body = format!(
-                            "{diff} new email{} in {label}",
-                            if diff == 1 { "" } else { "s" }
-                        );
+                        let (summary, body) = format_notification(label, new_emails);
                         let icon = resolve_notification_icon(&[
                             "mail-message",
                             "mail-message-symbolic",
@@ -273,7 +272,7 @@ impl App {
                             "mail-unread-symbolic",
                         ]);
                         let _ = notify_rust::Notification::new()
-                            .summary("kingi")
+                            .summary(&summary)
                             .body(&body)
                             .icon(&icon)
                             .show();
@@ -1507,6 +1506,35 @@ fn run_sync_command(cmd: &str, timeout: Duration) -> Option<String> {
     }
 }
 
+/// Format a desktop notification `(summary, body)` for newly arrived emails
+/// in the mailbox `label`.
+fn format_notification(label: &str, emails: &[Email]) -> (String, String) {
+    let mut lines: Vec<String> = emails
+        .iter()
+        .take(MAX_NOTIFICATION_EMAILS)
+        .map(|email| {
+            let author = {
+                let s = email.from.short().trim();
+                if s.is_empty() { "(unknown)" } else { s }
+            };
+            let trimmed_subject = email.subject.trim();
+            let subject = if trimmed_subject.is_empty() {
+                "(no subject)".to_string()
+            } else {
+                utils::truncate_string(trimmed_subject, MAX_NOTIFICATION_SUBJECT_LEN)
+            };
+            format!("{author}: {subject}")
+        })
+        .collect();
+
+    if emails.len() > MAX_NOTIFICATION_EMAILS {
+        let remaining = emails.len() - MAX_NOTIFICATION_EMAILS;
+        lines.push(format!("+{remaining} more"));
+    }
+
+    (label.to_string(), lines.join("\n"))
+}
+
 /// Returns the first icon name from `candidates` that can be found in common
 /// freedesktop icon directories, or the last candidate as a final fallback.
 fn resolve_notification_icon(candidates: &[&str]) -> String {
@@ -2574,5 +2602,104 @@ mod tests {
         assert!(dir.join("cur").join("msg3:2,S").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── notifications ────────────────────────────────────────────────────────
+
+    fn make_notif_email(id: &str, name: &str, addr: &str, subject: &str) -> Email {
+        let mut email = Email::new(
+            id,
+            None,
+            name,
+            subject,
+            None,
+            std::path::PathBuf::from(format!("/mb/new/{id}")),
+        );
+        email.from = Address::new(name, addr);
+        email
+    }
+
+    #[test]
+    fn format_notification_single_email_with_name_and_subject() {
+        let emails = vec![make_notif_email(
+            "1@test",
+            "Alice",
+            "alice@example.com",
+            "Hello world",
+        )];
+        let (summary, body) = format_notification("Inbox", &emails);
+        assert_eq!(summary, "Inbox");
+        assert_eq!(body, "Alice: Hello world");
+    }
+
+    #[test]
+    fn format_notification_falls_back_to_address_when_no_name() {
+        let emails = vec![make_notif_email(
+            "1@test",
+            "",
+            "bob@example.com",
+            "Patch review",
+        )];
+        let (summary, body) = format_notification("LKML", &emails);
+        assert_eq!(summary, "LKML");
+        assert_eq!(body, "bob@example.com: Patch review");
+    }
+
+    #[test]
+    fn format_notification_empty_subject_uses_placeholder() {
+        let emails = vec![make_notif_email("1@test", "Alice", "a@x.com", "   ")];
+        let (_, body) = format_notification("Inbox", &emails);
+        assert_eq!(body, "Alice: (no subject)");
+    }
+
+    #[test]
+    fn format_notification_truncates_long_subject() {
+        let long_subject =
+            "This is a very long email subject line that exceeds forty characters easily";
+        let emails = vec![make_notif_email("1@test", "Alice", "a@x.com", long_subject)];
+        let (_, body) = format_notification("Inbox", &emails);
+        let expected_subj = utils::truncate_string(long_subject, MAX_NOTIFICATION_SUBJECT_LEN);
+        assert!(expected_subj.ends_with('…'));
+        assert_eq!(body, format!("Alice: {expected_subj}"));
+    }
+
+    #[test]
+    fn format_notification_multiple_emails_up_to_limit() {
+        let emails = vec![
+            make_notif_email("1@test", "Alice", "a@x.com", "First subject"),
+            make_notif_email("2@test", "Bob", "b@x.com", "Second subject"),
+            make_notif_email("3@test", "Carol", "c@x.com", "Third subject"),
+        ];
+        let (summary, body) = format_notification("Inbox", &emails);
+        assert_eq!(summary, "Inbox");
+        assert_eq!(
+            body,
+            "Alice: First subject\nBob: Second subject\nCarol: Third subject"
+        );
+    }
+
+    #[test]
+    fn format_notification_overflow_appends_more_count() {
+        let emails: Vec<Email> = (1..=8)
+            .map(|i| {
+                make_notif_email(
+                    &format!("{i}@test"),
+                    &format!("User{i}"),
+                    "u@x.com",
+                    &format!("Subj {i}"),
+                )
+            })
+            .collect();
+        let (summary, body) = format_notification("Inbox", &emails);
+        assert_eq!(summary, "Inbox");
+        assert_eq!(
+            body,
+            "User1: Subj 1\n\
+             User2: Subj 2\n\
+             User3: Subj 3\n\
+             User4: Subj 4\n\
+             User5: Subj 5\n\
+             +3 more"
+        );
     }
 }

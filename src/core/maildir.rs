@@ -210,6 +210,7 @@ impl Maildir {
     }
 
     /// Total number of emails tracked in this mailbox.
+    #[cfg(test)]
     pub fn email_count(&self) -> usize {
         self.lookup.len()
     }
@@ -260,6 +261,14 @@ impl Maildir {
     /// Sync the in-memory state with disk. Returns the number of emails that
     /// failed to load (e.g., corrupt files, missing Message-ID).
     pub fn sync(&mut self) -> usize {
+        self.sync_new().0
+    }
+
+    /// Synchronise the in-memory state with disk and return both the number of
+    /// emails that failed to load and the list of genuinely newly arrived
+    /// emails (sorted newest-first by timestamp).
+    pub fn sync_new(&mut self) -> (usize, Vec<Email>) {
+        let before_ids: HashSet<String> = self.lookup.keys().cloned().collect();
         let disk: HashSet<PathBuf> = Maildir::iter_maildir(Path::new(&self.dir)).collect();
 
         // First pass: remove emails that disappeared from disk.  Removing a
@@ -289,7 +298,20 @@ impl Maildir {
         }
 
         self.invalidate();
-        failed
+
+        let mut new_emails: Vec<Email> = self
+            .lookup
+            .iter()
+            .filter(|(id, _)| !before_ids.contains(*id))
+            .map(|(_, thread)| thread.parent.clone())
+            .collect();
+        new_emails.sort_by(|a, b| {
+            b.timestamp
+                .cmp(&a.timestamp)
+                .then_with(|| a.message_id.cmp(&b.message_id))
+        });
+
+        (failed, new_emails)
     }
 
     /// Set the sort order and re-sort immediately.
@@ -1248,6 +1270,72 @@ mod tests {
         let dir = make_maildir();
         let maildir = Maildir::new(dir.to_str().unwrap()).unwrap();
         assert!(maildir.thread_paths("ghost@test").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Maildir::sync_new ─────────────────────────────────────────────────
+
+    #[test]
+    fn sync_new_returns_newly_arrived_emails_sorted_newest_first() {
+        let dir = make_maildir();
+        write_msg(
+            &dir,
+            "new",
+            "existing",
+            &email_content("existing@test", None, "Mon, 01 Jan 2024 00:00:00 +0000"),
+        );
+        let mut maildir = Maildir::new(dir.to_str().unwrap()).unwrap();
+
+        write_msg(
+            &dir,
+            "new",
+            "older_new",
+            &email_content("older_new@test", None, "Tue, 02 Jan 2024 00:00:00 +0000"),
+        );
+        write_msg(
+            &dir,
+            "new",
+            "newer_new",
+            &email_content("newer_new@test", None, "Wed, 03 Jan 2024 00:00:00 +0000"),
+        );
+
+        let (failed, new_emails) = maildir.sync_new();
+        assert_eq!(failed, 0);
+        let ids: Vec<&str> = new_emails.iter().map(|e| e.message_id.as_str()).collect();
+        assert_eq!(ids, vec!["newer_new@test", "older_new@test"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_new_ignores_renamed_files_and_relinked_children() {
+        let dir = make_maildir();
+        let parent_path = write_msg(
+            &dir,
+            "new",
+            "parent",
+            &email_content("parent@test", None, "Mon, 01 Jan 2024 00:00:00 +0000"),
+        );
+        write_msg(
+            &dir,
+            "new",
+            "child",
+            &email_content(
+                "child@test",
+                Some("parent@test"),
+                "Tue, 02 Jan 2024 00:00:00 +0000",
+            ),
+        );
+        let mut maildir = Maildir::new(dir.to_str().unwrap()).unwrap();
+
+        // Simulate mbsync moving `parent` from new/ to cur/parent:2,S
+        std::fs::rename(&parent_path, dir.join("cur").join("parent:2,S")).unwrap();
+
+        let (failed, new_emails) = maildir.sync_new();
+        assert_eq!(failed, 0);
+        assert!(
+            new_emails.is_empty(),
+            "renamed parent and re-linked child must not be reported as new"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
