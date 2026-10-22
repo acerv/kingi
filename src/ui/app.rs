@@ -24,7 +24,6 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const POLLING_TIME: u64 = 5;
-const SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_NOTIFICATION_EMAILS: usize = 5;
 const MAX_NOTIFICATION_SUBJECT_LEN: usize = 40;
 
@@ -931,11 +930,12 @@ impl App {
         if let Some(sync_cfg) = &self.config.sync {
             let (tx, rx) = mpsc::channel();
             let cmd = sync_cfg.command.clone();
+            let timeout = sync_cfg.timeout_duration();
 
             self.pending_sync = Some(PendingSync { rx, is_manual });
 
             std::thread::spawn(move || {
-                let result = run_sync_command(&cmd, SYNC_TIMEOUT);
+                let result = run_sync_command(&cmd, timeout);
                 let _ = tx.send(result);
             });
         }
@@ -1764,6 +1764,7 @@ mod tests {
         app.config.sync = Some(config::Sync {
             command: "echo 'network unreachable' >&2; exit 1".to_string(),
             interval: 60,
+            timeout: None,
         });
 
         // Background sync fails -> sets sync_error, not status_error.
@@ -1791,6 +1792,7 @@ mod tests {
         app.config.sync = Some(config::Sync {
             command: "true".to_string(),
             interval: 60,
+            timeout: None,
         });
         app.trigger_sync(true);
         while !app.poll_sync() {

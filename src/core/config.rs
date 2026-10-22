@@ -33,6 +33,14 @@ pub struct Smtp {
 pub struct Sync {
     pub command: String,
     pub interval: u64,
+    pub timeout: Option<u64>,
+}
+
+impl Sync {
+    /// Return the sync timeout duration, defaulting to 60 seconds.
+    pub fn timeout_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.timeout.unwrap_or(60))
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -228,13 +236,33 @@ password = "secret"
         let dir = temp_dir();
         let kingi_dir = dir.join("kingi");
         fs::create_dir_all(&kingi_dir).unwrap();
-        let toml = format!("{VALID_TOML}\n[sync]\ncommand = \"mbsync -a\"\ninterval = 300\n");
+        let toml = format!(
+            "{VALID_TOML}\n[sync]\ncommand = \"mbsync -a\"\ninterval = 300\ntimeout = 45\n"
+        );
         fs::write(kingi_dir.join("config.toml"), toml).unwrap();
         with_xdg(&dir, || {
             let sync = Config::load().unwrap().sync.unwrap();
             assert_eq!(sync.command, "mbsync -a");
             assert_eq!(sync.interval, 300);
+            assert_eq!(sync.timeout, Some(45));
+            assert_eq!(
+                sync.timeout_duration(),
+                std::time::Duration::from_secs(45)
+            );
         });
+    }
+
+    #[test]
+    fn config_sync_timeout_defaults_to_60() {
+        let sync = Sync {
+            command: "mbsync -a".to_string(),
+            interval: 300,
+            timeout: None,
+        };
+        assert_eq!(
+            sync.timeout_duration(),
+            std::time::Duration::from_secs(60)
+        );
     }
 
     #[test]
