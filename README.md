@@ -59,9 +59,11 @@ label = "Trash"
 path  = "/home/you/Mail/Trash/"
 
 # Optional: run a shell command every N seconds to sync mail.
+# timeout defaults to 60 seconds if omitted.
 [sync]
 command  = "mbsync -a"
 interval = 60
+timeout  = 60
 
 # Optional: Case-insensitive regular expressions that mark a patch as merged.
 # If omitted, kingi uses the default lore-cli regexes.
