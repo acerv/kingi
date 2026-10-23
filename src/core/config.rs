@@ -8,6 +8,8 @@ use std::path::PathBuf;
 pub struct Mailbox {
     pub label: String,
     pub path: String,
+    #[serde(default)]
+    pub markers: bool,
 }
 
 impl Mailbox {
@@ -48,6 +50,12 @@ pub struct Gpg {
     pub binary: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct Status {
+    #[serde(default)]
+    pub merged_markers: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     #[serde(rename = "mailbox")]
@@ -55,6 +63,7 @@ pub struct Config {
     pub smtp: Smtp,
     pub sync: Option<Sync>,
     pub gpg: Option<Gpg>,
+    pub status: Option<Status>,
 }
 
 impl Config {
@@ -80,6 +89,14 @@ impl Config {
             .unwrap_or("gpg")
     }
 
+    /// Return custom merged-patch regex markers, if configured.
+    pub fn merged_markers(&self) -> Vec<String> {
+        self.status
+            .as_ref()
+            .map(|s| s.merged_markers.clone())
+            .unwrap_or_default()
+    }
+
     /// Ensure that Drafts and Trash mailboxes are always present.
     /// If not explicitly configured, they default to subdirectories
     /// of the kingi config directory.
@@ -90,6 +107,7 @@ impl Config {
             self.mailboxes.push(Mailbox {
                 label: "Drafts".to_string(),
                 path: cfg_dir.join("drafts").to_string_lossy().into_owned(),
+                markers: false,
             });
         }
 
@@ -97,6 +115,7 @@ impl Config {
             self.mailboxes.push(Mailbox {
                 label: "Trash".to_string(),
                 path: cfg_dir.join("trash").to_string_lossy().into_owned(),
+                markers: false,
             });
         }
     }
@@ -338,6 +357,7 @@ password = "pass"
         Mailbox {
             label: label.to_string(),
             path: String::new(),
+            markers: false,
         }
     }
 
@@ -449,6 +469,35 @@ password = "pass"
         with_xdg(&dir, || {
             let err = Config::load().unwrap_err();
             assert!(err.to_string().contains("cannot parse config file"));
+        });
+    }
+
+    #[test]
+    fn config_load_markers_and_status() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
+        let toml = r#"
+[[mailbox]]
+label = "LKML"
+path = "/mail/lkml"
+markers = true
+
+[smtp]
+host = "smtp.example.com"
+port = 587
+username = "user"
+password = "pass"
+
+[status]
+merged_markers = ["applied", "merged"]
+"#;
+        fs::write(kingi_dir.join("config.toml"), toml).unwrap();
+        with_xdg(&dir, || {
+            let config = Config::load().unwrap();
+            assert!(config.mailboxes[0].markers);
+            assert_eq!(config.merged_markers(), vec!["applied", "merged"]);
         });
     }
 
