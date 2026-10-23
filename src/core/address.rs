@@ -181,7 +181,12 @@ impl AddressBook {
     /// Load the address book from `~/.config/kingi/addresses`.
     /// Returns an empty book if the file doesn't exist.
     pub fn load() -> Self {
-        let path = crate::core::config::config_dir().join("addresses");
+        Self::load_from(crate::core::config::config_dir().join("addresses"))
+    }
+
+    /// Load the address book from `path`.
+    /// Returns an empty book if the file doesn't exist.
+    pub fn load_from(path: std::path::PathBuf) -> Self {
         let entries = std::fs::read_to_string(&path)
             .unwrap_or_default()
             .lines()
@@ -419,15 +424,7 @@ mod tests {
         if !content.is_empty() {
             std::fs::write(&path, content).unwrap();
         }
-        AddressBook {
-            entries: content
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .filter_map(|l| l.parse::<Address>().ok())
-                .filter(|a| !a.full().is_empty())
-                .collect(),
-            path,
-        }
+        AddressBook::load_from(path)
     }
 
     #[test]

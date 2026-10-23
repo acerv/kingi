@@ -28,7 +28,10 @@ pub struct MarkersCache {
 
 impl MarkersCache {
     pub fn new(custom_markers: Vec<String>) -> Self {
-        let path = config_dir().join("markers_cache");
+        Self::new_at(config_dir().join("markers_cache"), custom_markers)
+    }
+
+    pub fn new_at(path: PathBuf, custom_markers: Vec<String>) -> Self {
         let mut cache = HashMap::new();
 
         let mut hasher = DefaultHasher::new();
@@ -105,6 +108,9 @@ impl MarkersCache {
             };
             content.push_str(&format!("{id} {s}\n"));
         }
+        if let Some(parent) = self.path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
         let _ = fs::write(&self.path, content);
         self.dirty = false;
     }
@@ -162,5 +168,31 @@ impl MarkersCache {
 impl Drop for MarkersCache {
     fn drop(&mut self) {
         self.save();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_at_persists_and_reloads_cache() {
+        let path = std::env::temp_dir().join(format!(
+            "kingi_markers_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let email = Email::new("msg-1", None, "a@x.com", "Patch", None, PathBuf::new());
+        {
+            let mut cache = MarkersCache::new_at(path.clone(), Vec::new());
+            cache.set_status(&email, PatchStatus::Merged);
+            cache.save();
+        }
+        let mut reloaded = MarkersCache::new_at(path.clone(), Vec::new());
+        assert_eq!(reloaded.get_status(&email), PatchStatus::Merged);
+        let _ = fs::remove_file(&path);
     }
 }
