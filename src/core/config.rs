@@ -142,7 +142,6 @@ impl Config {
     /// Initialize the configuration directory and create a new account folder
     /// with basic configuration templates. Returns the path to the created
     /// account `config.toml`.
-    #[allow(dead_code)]
     pub fn init(account: &str) -> Result<PathBuf> {
         let account = account.trim();
         if account.is_empty()
