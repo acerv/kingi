@@ -2349,13 +2349,13 @@ mod tests {
         assert_eq!(app.current_account_idx(), 1);
 
         // Sidebar visual row for work/Inbox:
-        // 0: personal, 1: Inbox, 2: Trash, 3: work, 4: Inbox
+        // 0: personal, 1: Inbox, 2: Trash, 3: "", 4: work, 5: Inbox
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| draw::draw_main(frame, frame.area(), &mut app))
             .unwrap();
-        assert_eq!(app.sidebar_state.selected(), Some(4));
+        assert_eq!(app.sidebar_state.selected(), Some(5));
 
         // Move targets for work/Inbox only include work's non-Drafts mailboxes (Sent, Trash)
         let targets: Vec<_> = app.move_targets().map(|(_, m)| m.label.as_str()).collect();

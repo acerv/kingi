@@ -101,6 +101,9 @@ pub fn sidebar_row_for_mailbox(accounts: &[config::Account], target_mb: usize) -
         if acct.mailboxes.is_empty() {
             continue;
         }
+        if row > 0 {
+            row += 1;
+        }
         row += 1;
         for _ in &acct.mailboxes {
             if mb_idx == target_mb {
@@ -154,6 +157,9 @@ pub fn draw_sidebar(
         if acct.mailboxes.is_empty() {
             continue;
         }
+        if !items.is_empty() {
+            items.push(ListItem::new(Line::from("")));
+        }
         items.push(ListItem::new(Line::from(Span::styled(
             acct.name.clone(),
             Style::default()
@@ -173,13 +179,13 @@ pub fn draw_sidebar(
             let flagged_active = flagged_filters.get(i).copied().unwrap_or(false);
             let (text, style) = if unread > 0 {
                 (
-                    format!("  {} ({})", m.label, unread),
+                    format!(" {} ({})", m.label, unread),
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
-                (format!("  {}", m.label), Style::default())
+                (format!(" {}", m.label), Style::default())
             };
             let mut spans = vec![Span::styled(text, style)];
             if filter_active {
