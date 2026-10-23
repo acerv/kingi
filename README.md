@@ -33,7 +33,8 @@ cargo install --path .
 
 ## Configuration
 
-Create `~/.config/kingi/accounts/<account>/config.toml` for each account:
+Run `kingi init [account]` to initialize `~/.config/kingi/`, or create
+`~/.config/kingi/accounts/<account>/config.toml` for each account:
 
 ```toml
 [smtp]
