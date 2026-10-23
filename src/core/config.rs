@@ -111,7 +111,85 @@ pub struct Config {
     pub accounts: Vec<Account>,
 }
 
+const DEFAULT_GLOBAL_CONFIG: &str = "\
+# [sync]
+# command  = \"mbsync -a\"
+# interval = 60
+# timeout  = 60
+
+# [gpg]
+# binary = \"gpg\"
+
+# [status]
+# merged_markers = []
+";
+
+const DEFAULT_ACCOUNT_CONFIG: &str = "\
+[smtp]
+host     = \"smtp.example.com\"
+port     = 587
+name     = \"Name Surname\"
+username = \"you@example.com\"
+password = \"secret\"
+
+[[mailbox]]
+label   = \"INBOX\"
+path    = \"/home/you/Mail/INBOX/\"
+markers = false
+";
+
 impl Config {
+    /// Initialize the configuration directory and create a new account folder
+    /// with basic configuration templates. Returns the path to the created
+    /// account `config.toml`.
+    #[allow(dead_code)]
+    pub fn init(account: &str) -> Result<PathBuf> {
+        let account = account.trim();
+        if account.is_empty()
+            || account == "."
+            || account == ".."
+            || account.contains('/')
+            || account.contains('\\')
+        {
+            anyhow::bail!("invalid account name: {account:?}");
+        }
+
+        let cfg_dir = config_dir();
+        std::fs::create_dir_all(&cfg_dir).with_context(|| {
+            format!(
+                "cannot create config directory: {}",
+                cfg_dir.display()
+            )
+        })?;
+
+        let global_cfg = cfg_dir.join("config.toml");
+        if !global_cfg.exists() {
+            std::fs::write(&global_cfg, DEFAULT_GLOBAL_CONFIG).with_context(|| {
+                format!("cannot write config file: {}", global_cfg.display())
+            })?;
+        }
+
+        let acct_dir = cfg_dir.join("accounts").join(account);
+        if acct_dir.exists() {
+            anyhow::bail!("account already exists: {}", acct_dir.display());
+        }
+
+        for maildir in ["drafts", "trash"] {
+            for sub in ["cur", "new", "tmp"] {
+                let p = acct_dir.join(maildir).join(sub);
+                std::fs::create_dir_all(&p)
+                    .with_context(|| format!("cannot create directory: {}", p.display()))?;
+            }
+        }
+
+        let acct_cfg = acct_dir.join("config.toml");
+        std::fs::write(&acct_cfg, DEFAULT_ACCOUNT_CONFIG).with_context(|| {
+            format!("cannot write account config: {}", acct_cfg.display())
+        })?;
+
+        Ok(acct_cfg)
+    }
+
     /// Load and parse the global config file and all account directories.
     ///
     /// Looks for global settings at `$XDG_CONFIG_HOME/kingi/config.toml`
@@ -640,6 +718,82 @@ password = "pass"
             assert_eq!(load_reply_template(3), Some("Template three".to_string()));
             assert_eq!(load_reply_template(0), Some("Template zero".to_string()));
             assert!(load_reply_template(5).is_none());
+        });
+    }
+
+    // ── Config::init ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn config_init_creates_global_and_account_configs() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        let kingi_dir = dir.join("kingi");
+        with_xdg(&dir, || {
+            let acct_cfg = Config::init("default").unwrap();
+            assert_eq!(
+                acct_cfg,
+                kingi_dir.join("accounts").join("default").join("config.toml")
+            );
+            assert!(kingi_dir.join("config.toml").exists());
+            assert!(acct_cfg.exists());
+            assert!(
+                kingi_dir
+                    .join("accounts/default/drafts/cur")
+                    .is_dir()
+            );
+            assert!(
+                kingi_dir
+                    .join("accounts/default/trash/cur")
+                    .is_dir()
+            );
+
+            let loaded = Config::load().unwrap();
+            assert_eq!(loaded.accounts.len(), 1);
+            assert_eq!(loaded.accounts[0].name, "default");
+            assert_eq!(loaded.accounts[0].mailboxes[0].label, "INBOX");
+        });
+    }
+
+    #[test]
+    fn config_init_preserves_existing_global_config() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        let kingi_dir = dir.join("kingi");
+        fs::create_dir_all(&kingi_dir).unwrap();
+        let custom_global = "[sync]\ncommand = \"mbsync -a\"\ninterval = 120\n";
+        fs::write(kingi_dir.join("config.toml"), custom_global).unwrap();
+        with_xdg(&dir, || {
+            Config::init("work").unwrap();
+            let content = fs::read_to_string(kingi_dir.join("config.toml")).unwrap();
+            assert_eq!(content, custom_global);
+            let loaded = Config::load().unwrap();
+            assert_eq!(loaded.accounts.len(), 1);
+            assert_eq!(loaded.accounts[0].name, "work");
+            assert_eq!(loaded.sync.unwrap().interval, 120);
+        });
+    }
+
+    #[test]
+    fn config_init_errors_if_account_exists() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        with_xdg(&dir, || {
+            Config::init("default").unwrap();
+            let err = Config::init("default").unwrap_err();
+            assert!(err.to_string().contains("account already exists"));
+        });
+    }
+
+    #[test]
+    fn config_init_rejects_invalid_account_names() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        with_xdg(&dir, || {
+            assert!(Config::init("").is_err());
+            assert!(Config::init(".").is_err());
+            assert!(Config::init("..").is_err());
+            assert!(Config::init("a/b").is_err());
+            assert!(Config::init("a\\b").is_err());
         });
     }
 }
