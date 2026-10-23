@@ -116,7 +116,7 @@ impl Config {
     ///
     /// Looks for global settings at `$XDG_CONFIG_HOME/kingi/config.toml`
     /// (optional if absent) and accounts in
-    /// `$XDG_CONFIG_HOME/kingi/accounts/<name>/account.toml`.
+    /// `$XDG_CONFIG_HOME/kingi/accounts/<name>/config.toml`.
     pub fn load() -> Result<Self> {
         let cfg_dir = config_dir();
         let path = cfg_dir.join("config.toml");
@@ -145,7 +145,7 @@ impl Config {
         dirs.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (name, dir) in dirs {
-            let account_path = dir.join("account.toml");
+            let account_path = dir.join("config.toml");
             let text = std::fs::read_to_string(&account_path).with_context(|| {
                 format!("cannot read account file: {}", account_path.display())
             })?;
@@ -250,7 +250,7 @@ password = "secret"
     fn write_account(kingi_dir: &PathBuf, name: &str, toml: &str) -> PathBuf {
         let acct_dir = kingi_dir.join("accounts").join(name);
         fs::create_dir_all(&acct_dir).unwrap();
-        fs::write(acct_dir.join("account.toml"), toml).unwrap();
+        fs::write(acct_dir.join("config.toml"), toml).unwrap();
         acct_dir
     }
 
