@@ -47,7 +47,8 @@ password = "app-password"
 [[mailbox]]
 label = "INBOX"
 path  = "/home/you/Mail/INBOX/"
-markers = true  # Enables patch status tracking (merged, reviewed, superseded)
+markers = true        # Enables patch status tracking (merged, reviewed, superseded)
+notifications = true  # Enables desktop notifications on new mail
 
 # "Drafts" and "Trash" labels are treated specially.
 # If omitted, defaults are created in the account directory.
