@@ -57,27 +57,115 @@ pub struct Status {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Config {
+struct AccountFile {
     #[serde(rename = "mailbox")]
+    mailboxes: Vec<Mailbox>,
+    smtp: Smtp,
+}
+
+#[derive(Debug, Clone)]
+pub struct Account {
+    pub name: String,
+    pub dir: PathBuf,
     pub mailboxes: Vec<Mailbox>,
     pub smtp: Smtp,
+}
+
+impl Account {
+    /// Ensure that Drafts and Trash mailboxes are always present for this
+    /// account. If not explicitly configured, they default to subdirectories
+    /// of the account directory.
+    pub fn ensure_defaults(&mut self) {
+        if !self.mailboxes.iter().any(|mb| mb.is_drafts()) {
+            self.mailboxes.push(Mailbox {
+                label: "Drafts".to_string(),
+                path: self.dir.join("drafts").to_string_lossy().into_owned(),
+                markers: false,
+            });
+        }
+
+        if !self.mailboxes.iter().any(|mb| mb.is_trash()) {
+            self.mailboxes.push(Mailbox {
+                label: "Trash".to_string(),
+                path: self.dir.join("trash").to_string_lossy().into_owned(),
+                markers: false,
+            });
+        }
+    }
+
+    /// Read `signature` from this account's directory, falling back to the
+    /// global config directory if present.
+    pub fn load_signature(&self) -> Option<String> {
+        std::fs::read_to_string(self.dir.join("signature"))
+            .ok()
+            .or_else(load_signature)
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct Config {
     pub sync: Option<Sync>,
     pub gpg: Option<Gpg>,
     pub status: Option<Status>,
+    #[serde(skip)]
+    pub accounts: Vec<Account>,
 }
 
 impl Config {
-    /// Load and parse the config file.
+    /// Load and parse the global config file and all account directories.
     ///
-    /// Looks for the file at `$XDG_CONFIG_HOME/kingi/config.toml`,
-    /// falling back to `~/.config/kingi/config.toml`.
+    /// Looks for global settings at `$XDG_CONFIG_HOME/kingi/config.toml`
+    /// (optional if absent) and accounts in
+    /// `$XDG_CONFIG_HOME/kingi/accounts/<name>/account.toml`.
     pub fn load() -> Result<Self> {
-        let path = config_dir().join("config.toml");
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("cannot read config file: {}", path.display()))?;
-        let mut config: Config = toml::from_str(&text)
-            .with_context(|| format!("cannot parse config file: {}", path.display()))?;
-        config.ensure_defaults();
+        let cfg_dir = config_dir();
+        let path = cfg_dir.join("config.toml");
+        let mut config: Config = if path.exists() {
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("cannot read config file: {}", path.display()))?;
+            toml::from_str(&text)
+                .with_context(|| format!("cannot parse config file: {}", path.display()))?
+        } else {
+            Config::default()
+        };
+
+        let accounts_dir = cfg_dir.join("accounts");
+        let entries = std::fs::read_dir(&accounts_dir).with_context(|| {
+            format!(
+                "cannot read accounts directory: {}",
+                accounts_dir.display()
+            )
+        })?;
+
+        let mut dirs: Vec<(String, PathBuf)> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+            .collect();
+        dirs.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (name, dir) in dirs {
+            let account_path = dir.join("account.toml");
+            let text = std::fs::read_to_string(&account_path).with_context(|| {
+                format!("cannot read account file: {}", account_path.display())
+            })?;
+            let parsed: AccountFile = toml::from_str(&text).with_context(|| {
+                format!("cannot parse account file: {}", account_path.display())
+            })?;
+            let mut account = Account {
+                name,
+                dir,
+                mailboxes: parsed.mailboxes,
+                smtp: parsed.smtp,
+            };
+            account.ensure_defaults();
+            config.accounts.push(account);
+        }
+
+        if config.accounts.is_empty() {
+            anyhow::bail!("no accounts found in {}", accounts_dir.display());
+        }
+
         Ok(config)
     }
 
@@ -95,29 +183,6 @@ impl Config {
             .as_ref()
             .map(|s| s.merged_markers.clone())
             .unwrap_or_default()
-    }
-
-    /// Ensure that Drafts and Trash mailboxes are always present.
-    /// If not explicitly configured, they default to subdirectories
-    /// of the kingi config directory.
-    fn ensure_defaults(&mut self) {
-        let cfg_dir = config_dir();
-
-        if !self.mailboxes.iter().any(|mb| mb.is_drafts()) {
-            self.mailboxes.push(Mailbox {
-                label: "Drafts".to_string(),
-                path: cfg_dir.join("drafts").to_string_lossy().into_owned(),
-                markers: false,
-            });
-        }
-
-        if !self.mailboxes.iter().any(|mb| mb.is_trash()) {
-            self.mailboxes.push(Mailbox {
-                label: "Trash".to_string(),
-                path: cfg_dir.join("trash").to_string_lossy().into_owned(),
-                markers: false,
-            });
-        }
     }
 }
 
@@ -170,7 +235,7 @@ mod tests {
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 
-    const VALID_TOML: &str = r#"
+    const VALID_ACCOUNT_TOML: &str = r#"
 [[mailbox]]
 label = "Inbox"
 path = "/home/user/mail/inbox"
@@ -181,6 +246,13 @@ port = 587
 username = "user@example.com"
 password = "secret"
 "#;
+
+    fn write_account(kingi_dir: &PathBuf, name: &str, toml: &str) -> PathBuf {
+        let acct_dir = kingi_dir.join("accounts").join(name);
+        fs::create_dir_all(&acct_dir).unwrap();
+        fs::write(acct_dir.join("account.toml"), toml).unwrap();
+        acct_dir
+    }
 
     #[test]
     fn config_dir_uses_xdg_config_home() {
@@ -227,25 +299,58 @@ password = "secret"
     }
 
     #[test]
+    fn account_load_signature_prefers_account_file() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        let kingi_dir = dir.join("kingi");
+        let acct_dir = write_account(&kingi_dir, "work", VALID_ACCOUNT_TOML);
+        fs::write(kingi_dir.join("signature"), "global sig").unwrap();
+        fs::write(acct_dir.join("signature"), "work sig").unwrap();
+        with_xdg(&dir, || {
+            let config = Config::load().unwrap();
+            assert_eq!(
+                config.accounts[0].load_signature().as_deref(),
+                Some("work sig")
+            );
+        });
+    }
+
+    #[test]
     fn config_load_success() {
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
         let kingi_dir = dir.join("kingi");
-        fs::create_dir_all(&kingi_dir).unwrap();
-        fs::write(kingi_dir.join("config.toml"), VALID_TOML).unwrap();
+        write_account(&kingi_dir, "personal", VALID_ACCOUNT_TOML);
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
-            assert_eq!(config.mailboxes[0].label, "Inbox");
-            assert_eq!(config.mailboxes[0].path, "/home/user/mail/inbox");
-            assert_eq!(config.smtp.host, "smtp.example.com");
-            assert_eq!(config.smtp.port, 587);
-            assert_eq!(config.smtp.username, "user@example.com");
-            assert_eq!(config.smtp.password, "secret");
-            assert!(config.smtp.name.is_none());
+            assert_eq!(config.accounts.len(), 1);
+            let acct = &config.accounts[0];
+            assert_eq!(acct.name, "personal");
+            assert_eq!(acct.mailboxes[0].label, "Inbox");
+            assert_eq!(acct.mailboxes[0].path, "/home/user/mail/inbox");
+            assert_eq!(acct.smtp.host, "smtp.example.com");
+            assert_eq!(acct.smtp.port, 587);
+            assert_eq!(acct.smtp.username, "user@example.com");
+            assert_eq!(acct.smtp.password, "secret");
+            assert!(acct.smtp.name.is_none());
             assert!(config.sync.is_none());
             // Drafts and Trash are always appended when missing
-            assert!(config.mailboxes.iter().any(|mb| mb.is_drafts()));
-            assert!(config.mailboxes.iter().any(|mb| mb.is_trash()));
+            assert!(acct.mailboxes.iter().any(|mb| mb.is_drafts()));
+            assert!(acct.mailboxes.iter().any(|mb| mb.is_trash()));
+        });
+    }
+
+    #[test]
+    fn config_load_sorts_accounts_alphabetically() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        let kingi_dir = dir.join("kingi");
+        write_account(&kingi_dir, "work", VALID_ACCOUNT_TOML);
+        write_account(&kingi_dir, "personal", VALID_ACCOUNT_TOML);
+        with_xdg(&dir, || {
+            let config = Config::load().unwrap();
+            let names: Vec<_> = config.accounts.iter().map(|a| a.name.as_str()).collect();
+            assert_eq!(names, vec!["personal", "work"]);
         });
     }
 
@@ -254,10 +359,8 @@ password = "secret"
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
         let kingi_dir = dir.join("kingi");
-        fs::create_dir_all(&kingi_dir).unwrap();
-        let toml = format!(
-            "{VALID_TOML}\n[sync]\ncommand = \"mbsync -a\"\ninterval = 300\ntimeout = 45\n"
-        );
+        write_account(&kingi_dir, "default", VALID_ACCOUNT_TOML);
+        let toml = "[sync]\ncommand = \"mbsync -a\"\ninterval = 300\ntimeout = 45\n";
         fs::write(kingi_dir.join("config.toml"), toml).unwrap();
         with_xdg(&dir, || {
             let sync = Config::load().unwrap().sync.unwrap();
@@ -289,7 +392,6 @@ password = "secret"
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
         let kingi_dir = dir.join("kingi");
-        fs::create_dir_all(&kingi_dir).unwrap();
         let toml = r#"
 [[mailbox]]
 label = "Inbox"
@@ -305,14 +407,15 @@ port = 465
 username = "user"
 password = "pass"
 "#;
-        fs::write(kingi_dir.join("config.toml"), toml).unwrap();
+        write_account(&kingi_dir, "default", toml);
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
-            assert_eq!(config.mailboxes[0].label, "Inbox");
-            assert_eq!(config.mailboxes[1].label, "Sent");
-            assert_eq!(config.mailboxes[1].path, "/mail/sent");
-            assert!(config.mailboxes.iter().any(|mb| mb.is_drafts()));
-            assert!(config.mailboxes.iter().any(|mb| mb.is_trash()));
+            let acct = &config.accounts[0];
+            assert_eq!(acct.mailboxes[0].label, "Inbox");
+            assert_eq!(acct.mailboxes[1].label, "Sent");
+            assert_eq!(acct.mailboxes[1].path, "/mail/sent");
+            assert!(acct.mailboxes.iter().any(|mb| mb.is_drafts()));
+            assert!(acct.mailboxes.iter().any(|mb| mb.is_trash()));
         });
     }
 
@@ -321,7 +424,6 @@ password = "pass"
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
         let kingi_dir = dir.join("kingi");
-        fs::create_dir_all(&kingi_dir).unwrap();
         let toml = r#"
 [[mailbox]]
 label = "Inbox"
@@ -334,20 +436,20 @@ username = "user"
 name = "Alice"
 password = "pass"
 "#;
-        fs::write(kingi_dir.join("config.toml"), toml).unwrap();
+        write_account(&kingi_dir, "default", toml);
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
-            assert_eq!(config.smtp.name, Some("Alice".to_string()));
+            assert_eq!(config.accounts[0].smtp.name, Some("Alice".to_string()));
         });
     }
 
     #[test]
-    fn config_load_missing_file_returns_error() {
+    fn config_load_missing_accounts_returns_error() {
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
         with_xdg(&dir, || {
             let err = Config::load().unwrap_err();
-            assert!(err.to_string().contains("cannot read config file"));
+            assert!(err.to_string().contains("cannot read accounts directory"));
         });
     }
 
@@ -408,18 +510,18 @@ password = "pass"
     // ── ensure_defaults ────────────────────────────────────────────────────
 
     #[test]
-    fn ensure_defaults_adds_drafts_and_trash() {
+    fn ensure_defaults_adds_drafts_and_trash_in_account_dir() {
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
         let kingi_dir = dir.join("kingi");
-        fs::create_dir_all(&kingi_dir).unwrap();
-        fs::write(kingi_dir.join("config.toml"), VALID_TOML).unwrap();
+        let acct_dir = write_account(&kingi_dir, "work", VALID_ACCOUNT_TOML);
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
-            let drafts = config.mailboxes.iter().find(|mb| mb.is_drafts()).unwrap();
-            let trash = config.mailboxes.iter().find(|mb| mb.is_trash()).unwrap();
-            assert_eq!(drafts.path, kingi_dir.join("drafts").to_string_lossy());
-            assert_eq!(trash.path, kingi_dir.join("trash").to_string_lossy());
+            let acct = &config.accounts[0];
+            let drafts = acct.mailboxes.iter().find(|mb| mb.is_drafts()).unwrap();
+            let trash = acct.mailboxes.iter().find(|mb| mb.is_trash()).unwrap();
+            assert_eq!(drafts.path, acct_dir.join("drafts").to_string_lossy());
+            assert_eq!(trash.path, acct_dir.join("trash").to_string_lossy());
         });
     }
 
@@ -428,15 +530,16 @@ password = "pass"
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
         let kingi_dir = dir.join("kingi");
-        fs::create_dir_all(&kingi_dir).unwrap();
-        let toml =
-            format!("{VALID_TOML}\n[[mailbox]]\nlabel = \"Drafts\"\npath = \"/mail/drafts\"\n");
-        fs::write(kingi_dir.join("config.toml"), toml).unwrap();
+        let toml = format!(
+            "{VALID_ACCOUNT_TOML}\n[[mailbox]]\nlabel = \"Drafts\"\npath = \"/mail/drafts\"\n"
+        );
+        write_account(&kingi_dir, "work", &toml);
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
-            let count = config.mailboxes.iter().filter(|mb| mb.is_drafts()).count();
+            let acct = &config.accounts[0];
+            let count = acct.mailboxes.iter().filter(|mb| mb.is_drafts()).count();
             assert_eq!(count, 1);
-            let drafts = config.mailboxes.iter().find(|mb| mb.is_drafts()).unwrap();
+            let drafts = acct.mailboxes.iter().find(|mb| mb.is_drafts()).unwrap();
             assert_eq!(drafts.path, "/mail/drafts");
         });
     }
@@ -446,15 +549,15 @@ password = "pass"
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
         let kingi_dir = dir.join("kingi");
-        fs::create_dir_all(&kingi_dir).unwrap();
         let toml =
-            format!("{VALID_TOML}\n[[mailbox]]\nlabel = \"Trash\"\npath = \"/mail/trash\"\n");
-        fs::write(kingi_dir.join("config.toml"), toml).unwrap();
+            format!("{VALID_ACCOUNT_TOML}\n[[mailbox]]\nlabel = \"Trash\"\npath = \"/mail/trash\"\n");
+        write_account(&kingi_dir, "work", &toml);
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
-            let count = config.mailboxes.iter().filter(|mb| mb.is_trash()).count();
+            let acct = &config.accounts[0];
+            let count = acct.mailboxes.iter().filter(|mb| mb.is_trash()).count();
             assert_eq!(count, 1);
-            let trash = config.mailboxes.iter().find(|mb| mb.is_trash()).unwrap();
+            let trash = acct.mailboxes.iter().find(|mb| mb.is_trash()).unwrap();
             assert_eq!(trash.path, "/mail/trash");
         });
     }
@@ -477,8 +580,7 @@ password = "pass"
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = temp_dir();
         let kingi_dir = dir.join("kingi");
-        fs::create_dir_all(&kingi_dir).unwrap();
-        let toml = r#"
+        let acct_toml = r#"
 [[mailbox]]
 label = "LKML"
 path = "/mail/lkml"
@@ -489,14 +591,13 @@ host = "smtp.example.com"
 port = 587
 username = "user"
 password = "pass"
-
-[status]
-merged_markers = ["applied", "merged"]
 "#;
-        fs::write(kingi_dir.join("config.toml"), toml).unwrap();
+        write_account(&kingi_dir, "kernel", acct_toml);
+        let cfg_toml = "[status]\nmerged_markers = [\"applied\", \"merged\"]\n";
+        fs::write(kingi_dir.join("config.toml"), cfg_toml).unwrap();
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
-            assert!(config.mailboxes[0].markers);
+            assert!(config.accounts[0].mailboxes[0].markers);
             assert_eq!(config.merged_markers(), vec!["applied", "merged"]);
         });
     }

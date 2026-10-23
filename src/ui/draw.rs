@@ -51,8 +51,8 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
 
     let titles: Vec<String> = std::iter::once("Kingi".to_string())
         .chain(app.tabs.iter().map(|tab| match tab {
-            Tab::Email(ev) => utils::truncate_string(ev.subject(), 20),
-            Tab::Compose(ed, _) => {
+            Tab::Email(ev, _) => utils::truncate_string(ev.subject(), 20),
+            Tab::Compose(ed, _, _) => {
                 let t = ed.title();
                 if t.is_empty() {
                     "Compose".to_string()
@@ -79,8 +79,8 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         draw_main(frame, chunks[2], app);
     } else if let Some(tab) = app.tabs.get_mut(app.current_tab.saturating_sub(1)) {
         match tab {
-            Tab::Email(ev) => email::draw(frame, chunks[2], ev),
-            Tab::Compose(ed, _) => editor::draw(frame, chunks[2], ed),
+            Tab::Email(ev, _) => email::draw(frame, chunks[2], ev),
+            Tab::Compose(ed, _, _) => editor::draw(frame, chunks[2], ed),
         }
     }
 
@@ -94,20 +94,40 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     }
 }
 
+pub fn sidebar_row_for_mailbox(accounts: &[config::Account], target_mb: usize) -> Option<usize> {
+    let mut mb_idx = 0;
+    let mut row = 0;
+    for acct in accounts {
+        if acct.mailboxes.is_empty() {
+            continue;
+        }
+        row += 1;
+        for _ in &acct.mailboxes {
+            if mb_idx == target_mb {
+                return Some(row);
+            }
+            mb_idx += 1;
+            row += 1;
+        }
+    }
+    None
+}
+
 pub fn draw_main(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(24), Constraint::Min(0)])
         .split(area);
 
-    app.sidebar_state.select(Some(app.current_mb));
+    app.sidebar_state
+        .select(sidebar_row_for_mailbox(&app.config.accounts, app.current_mb));
     let unread_filters: Vec<bool> = app.threads.iter().map(|tv| tv.is_unread_only()).collect();
     let flagged_filters: Vec<bool> = app.threads.iter().map(|tv| tv.is_flagged_only()).collect();
     draw_sidebar(
         frame,
         chunks[0],
         &mut app.sidebar_state,
-        &app.config.mailboxes,
+        &app.config.accounts,
         &app.maildirs,
         &unread_filters,
         &flagged_filters,
@@ -122,31 +142,44 @@ pub fn draw_sidebar(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
     state: &mut ListState,
-    mailboxes: &[config::Mailbox],
+    accounts: &[config::Account],
     maildirs: &[Maildir],
     unread_filters: &[bool],
     flagged_filters: &[bool],
 ) {
-    let items: Vec<ListItem> = mailboxes
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut mb_idx = 0;
+
+    for acct in accounts {
+        if acct.mailboxes.is_empty() {
+            continue;
+        }
+        items.push(ListItem::new(Line::from(Span::styled(
+            acct.name.clone(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))));
+
+        for m in &acct.mailboxes {
+            let i = mb_idx;
+            mb_idx += 1;
             let unread = maildirs
-                .iter()
-                .find(|md| md.path() == m.path)
+                .get(i)
+                .or_else(|| maildirs.iter().find(|md| md.path() == m.path))
                 .map(|md| md.unread_count())
                 .unwrap_or(0);
             let filter_active = unread_filters.get(i).copied().unwrap_or(false);
             let flagged_active = flagged_filters.get(i).copied().unwrap_or(false);
             let (text, style) = if unread > 0 {
                 (
-                    format!("{} ({})", m.label, unread),
+                    format!("  {} ({})", m.label, unread),
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
-                (m.label.clone(), Style::default())
+                (format!("  {}", m.label), Style::default())
             };
             let mut spans = vec![Span::styled(text, style)];
             if filter_active {
@@ -155,9 +188,15 @@ pub fn draw_sidebar(
             if flagged_active {
                 spans.push(Span::styled(" [f]", Style::default().fg(Color::Red)));
             }
-            ListItem::new(Line::from(spans))
-        })
-        .collect();
+            items.push(ListItem::new(Line::from(spans)));
+        }
+    }
+
+    if let Some(sel) = state.selected()
+        && sel.saturating_sub(1) < state.offset()
+    {
+        *state.offset_mut() = sel.saturating_sub(1);
+    }
 
     let widget = List::new(items)
         .block(Block::default().borders(Borders::RIGHT))

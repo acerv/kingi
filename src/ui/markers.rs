@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Andrea Cervesato <andrea.cervesato@suse.com>
+#[cfg(test)]
 use crate::core::config::config_dir;
 use crate::core::thread::Email;
 use regex::Regex;
@@ -27,6 +28,7 @@ pub struct MarkersCache {
 }
 
 impl MarkersCache {
+    #[cfg(test)]
     pub fn new(custom_markers: Vec<String>) -> Self {
         Self::new_at(config_dir().join("markers_cache"), custom_markers)
     }

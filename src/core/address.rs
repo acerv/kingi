@@ -178,12 +178,6 @@ impl Default for AddressBook {
 }
 
 impl AddressBook {
-    /// Load the address book from `~/.config/kingi/addresses`.
-    /// Returns an empty book if the file doesn't exist.
-    pub fn load() -> Self {
-        Self::load_from(crate::core::config::config_dir().join("addresses"))
-    }
-
     /// Load the address book from `path`.
     /// Returns an empty book if the file doesn't exist.
     pub fn load_from(path: std::path::PathBuf) -> Self {

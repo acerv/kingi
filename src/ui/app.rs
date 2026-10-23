@@ -63,8 +63,8 @@ pub(super) enum ComposeKind {
 }
 
 pub(super) enum Tab {
-    Email(Box<EmailView>),
-    Compose(Box<Editor>, ComposeKind),
+    Email(Box<EmailView>, usize),
+    Compose(Box<Editor>, ComposeKind, usize),
 }
 
 pub(super) struct PendingSync {
@@ -74,6 +74,8 @@ pub(super) struct PendingSync {
 
 pub struct App {
     pub(super) config: Config,
+    pub(super) mailboxes: Vec<Mailbox>,
+    pub(super) mb_accounts: Vec<usize>,
     pub(super) sidebar_state: ListState,
     pub(super) maildirs: Vec<Maildir>,
     pub(super) threads: Vec<ThreadsView>,
@@ -92,14 +94,17 @@ pub struct App {
     pub(super) help: Option<HelpView>,
     pub(super) status_error: Option<String>,
     terminal: Option<Terminal<CrosstermBackend<io::Stdout>>>,
-    address_book: AddressBook,
+    address_books: Vec<AddressBook>,
     clipboard: Option<Clipboard>,
 }
 
 impl App {
     pub fn new(config: Config) -> anyhow::Result<Self> {
+        let mut mailboxes = Vec::new();
+        let mut mb_accounts = Vec::new();
         let mut maildirs = Vec::new();
         let mut threads = Vec::new();
+        let mut address_books = Vec::new();
         let clipboard = Clipboard::new().ok();
 
         enable_raw_mode()?;
@@ -108,38 +113,49 @@ impl App {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        let markers_cache = std::rc::Rc::new(std::cell::RefCell::new(
-            crate::ui::markers::MarkersCache::new(config.merged_markers()),
-        ));
+        let custom_markers = config.merged_markers();
+        let total: usize = config.accounts.iter().map(|a| a.mailboxes.len()).sum();
+        let mut loaded = 0usize;
 
-        let total = config.mailboxes.len();
-        for (i, mb) in config.mailboxes.iter().enumerate() {
-            let label = mb.label.as_str();
-            terminal.draw(|frame| draw::draw_startup(frame, label, i, total))?;
-            let maildir = Maildir::new(&mb.path).unwrap_or_default();
-            let tv =
-                ThreadsView::with_markers(maildir.threads(), mb.markers, markers_cache.clone());
-            maildirs.push(maildir);
-            threads.push(tv);
-        }
+        for (acct_idx, acct) in config.accounts.iter().enumerate() {
+            let markers_cache = std::rc::Rc::new(std::cell::RefCell::new(
+                crate::ui::markers::MarkersCache::new_at(
+                    acct.dir.join("markers_cache"),
+                    custom_markers.clone(),
+                ),
+            ));
+            let mut address_book = AddressBook::load_from(acct.dir.join("addresses"));
+            let mut addrs = Vec::new();
 
-        let mut address_book = AddressBook::load();
-        let mut addrs = Vec::new();
-        for md in &maildirs {
-            for thread in md.threads().borrow().iter() {
-                addrs.push(thread.parent.from.clone());
+            for mb in &acct.mailboxes {
+                let label = format!("{} / {}", acct.name, mb.label);
+                terminal.draw(|frame| draw::draw_startup(frame, &label, loaded, total))?;
+                loaded += 1;
+
+                let maildir = Maildir::new(&mb.path).unwrap_or_default();
+                for thread in maildir.threads().borrow().iter() {
+                    addrs.push(thread.parent.from.clone());
+                }
+                let tv =
+                    ThreadsView::with_markers(maildir.threads(), mb.markers, markers_cache.clone());
+                mailboxes.push(mb.clone());
+                mb_accounts.push(acct_idx);
+                maildirs.push(maildir);
+                threads.push(tv);
             }
+
+            address_book.harvest(&addrs);
+            address_books.push(address_book);
         }
-        address_book.harvest(&addrs);
 
         let mut sidebar_state = ListState::default();
-        if !config.mailboxes.is_empty() {
-            sidebar_state.select(Some(0));
-        }
+        sidebar_state.select(draw::sidebar_row_for_mailbox(&config.accounts, 0));
 
         Ok(Self {
             sidebar_state,
             config,
+            mailboxes,
+            mb_accounts,
             maildirs,
             threads,
             tabs: Vec::new(),
@@ -156,7 +172,7 @@ impl App {
             help: None,
             status_error: None,
             terminal: Some(terminal),
-            address_book,
+            address_books,
             clipboard,
         })
     }
@@ -230,8 +246,10 @@ impl App {
                 // Notify per mailbox if new emails arrived
                 for (i, new_emails) in new_per_mailbox.iter().enumerate() {
                     if !new_emails.is_empty() {
-                        let label = &self.config.mailboxes[i].label;
-                        let (summary, body) = format_notification(label, new_emails);
+                        let acct_idx = self.mb_accounts[i];
+                        let acct_name = &self.config.accounts[acct_idx].name;
+                        let label = format!("{acct_name}: {}", self.mailboxes[i].label);
+                        let (summary, body) = format_notification(&label, new_emails);
                         let icon = resolve_notification_icon(&[
                             "mail-message",
                             "mail-message-symbolic",
@@ -479,14 +497,14 @@ impl App {
             return true;
         }
         match self.tabs[ei] {
-            Tab::Email(_) => self.handle_email_tab_key(key, ei),
-            Tab::Compose(_, _) => self.handle_compose_tab_key(key, ei),
+            Tab::Email(_, _) => self.handle_email_tab_key(key, ei),
+            Tab::Compose(_, _, _) => self.handle_compose_tab_key(key, ei),
         }
         true
     }
 
     fn handle_compose_tab_key(&mut self, key: KeyEvent, ei: usize) {
-        if let Tab::Compose(ref mut ed, _) = self.tabs[ei] {
+        if let Tab::Compose(ref mut ed, _, acct_idx) = self.tabs[ei] {
             match ed.attachment_key(key) {
                 Ok(true) => return,
                 Err(err) => {
@@ -497,7 +515,11 @@ impl App {
             }
             match (key.modifiers, key.code) {
                 (KeyModifiers::CONTROL, KeyCode::Char('q')) => {
-                    let has_drafts = self.config.mailboxes.iter().any(|mb| mb.is_drafts());
+                    let has_drafts = self
+                        .mailboxes
+                        .iter()
+                        .enumerate()
+                        .any(|(i, mb)| self.mb_accounts[i] == acct_idx && mb.is_drafts());
                     let actions = if has_drafts {
                         vec![SendAction::Send, SendAction::SaveDraft, SendAction::Discard]
                     } else {
@@ -510,8 +532,8 @@ impl App {
                 }
                 _ => {
                     let refresh = ed.on_key(key);
-                    if refresh {
-                        ed.update_autocomplete(&self.address_book);
+                    if refresh && let Some(ab) = self.address_books.get(acct_idx) {
+                        ed.update_autocomplete(ab);
                     }
                 }
             }
@@ -549,28 +571,32 @@ impl App {
 
     fn execute_send_action(&mut self, action: &SendAction) {
         let ei = self.current_tab.saturating_sub(1);
-        let (draft, kind_id) = if let Some(Tab::Compose(ed, kind)) = self.tabs.get(ei) {
-            let id = match kind {
-                ComposeKind::Reply(id) | ComposeKind::Forward(id) => Some(id.clone()),
-                ComposeKind::New => None,
+        let (draft, kind_id, acct_idx) =
+            if let Some(Tab::Compose(ed, kind, acct_idx)) = self.tabs.get(ei) {
+                let id = match kind {
+                    ComposeKind::Reply(id) | ComposeKind::Forward(id) => Some(id.clone()),
+                    ComposeKind::New => None,
+                };
+                let is_fwd = matches!(kind, ComposeKind::Forward(_));
+                (ed.draft(), id.map(|i| (i, is_fwd)), *acct_idx)
+            } else {
+                return;
             };
-            let is_fwd = matches!(kind, ComposeKind::Forward(_));
-            (ed.draft(), id.map(|i| (i, is_fwd)))
-        } else {
-            return;
-        };
 
         match action {
             SendAction::Send => {
                 let mut addrs = draft.to.clone();
                 addrs.extend(draft.cc.clone());
-                self.address_book.harvest(&addrs);
+                if let Some(ab) = self.address_books.get_mut(acct_idx) {
+                    ab.harvest(&addrs);
+                }
                 self.sending = true;
                 if let Some(mut terminal) = self.terminal.take() {
                     let _ = terminal.draw(|frame| draw::draw(frame, self));
                     self.terminal = Some(terminal);
                 }
-                let res = send_message(&self.config.smtp, &draft);
+                let smtp = &self.config.accounts[acct_idx].smtp;
+                let res = send_message(smtp, &draft);
                 self.sending = false;
                 if let Err(err) = res {
                     self.status_error = Some(format!("{err:#}"));
@@ -587,12 +613,14 @@ impl App {
                 }
             }
             SendAction::SaveDraft => {
-                let drafts_idx = self.config.mailboxes.iter().position(|mb| mb.is_drafts());
+                let drafts_idx = self
+                    .mailboxes
+                    .iter()
+                    .enumerate()
+                    .position(|(i, mb)| self.mb_accounts[i] == acct_idx && mb.is_drafts());
                 if let Some(idx) = drafts_idx {
-                    let from = Address::new(
-                        self.config.smtp.name.as_deref().unwrap_or(""),
-                        &self.config.smtp.username,
-                    );
+                    let smtp = &self.config.accounts[acct_idx].smtp;
+                    let from = Address::new(smtp.name.as_deref().unwrap_or(""), &smtp.username);
                     let content = match draft.to_rfc2822(&from.full()) {
                         Ok(content) => content,
                         Err(err) => {
@@ -625,7 +653,7 @@ impl App {
     }
 
     fn handle_email_tab_key(&mut self, key: KeyEvent, ei: usize) {
-        if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
+        if let Some(Tab::Email(ev, _)) = self.tabs.get_mut(ei) {
             match ev.attachment_key(key) {
                 Ok(true) => return,
                 Err(err) => {
@@ -651,32 +679,32 @@ impl App {
                 self.open_selected_email();
             }
             (_, KeyCode::Char('j') | KeyCode::Down) => {
-                if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
+                if let Some(Tab::Email(ev, _)) = self.tabs.get_mut(ei) {
                     ev.scroll_down(1);
                 }
             }
             (KeyModifiers::CONTROL, KeyCode::Char('d')) | (_, KeyCode::PageDown) => {
-                if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
+                if let Some(Tab::Email(ev, _)) = self.tabs.get_mut(ei) {
                     ev.scroll_down(15);
                 }
             }
             (_, KeyCode::Char('k') | KeyCode::Up) => {
-                if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
+                if let Some(Tab::Email(ev, _)) = self.tabs.get_mut(ei) {
                     ev.scroll_up(1);
                 }
             }
             (KeyModifiers::CONTROL, KeyCode::Char('u')) | (_, KeyCode::PageUp) => {
-                if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
+                if let Some(Tab::Email(ev, _)) = self.tabs.get_mut(ei) {
                     ev.scroll_up(15);
                 }
             }
             (_, KeyCode::Char('g')) => {
-                if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
+                if let Some(Tab::Email(ev, _)) = self.tabs.get_mut(ei) {
                     ev.first_line();
                 }
             }
             (_, KeyCode::Char('G')) => {
-                if let Some(Tab::Email(ev)) = self.tabs.get_mut(ei) {
+                if let Some(Tab::Email(ev, _)) = self.tabs.get_mut(ei) {
                     ev.last_line();
                 }
             }
@@ -696,7 +724,7 @@ impl App {
             (_, KeyCode::Char('?')) => self.help = Some(HelpView::new()),
             (_, KeyCode::Char('Y')) => {
                 let raw = match self.tabs.get(ei) {
-                    Some(Tab::Email(ev)) => Some(ev.raw_body().to_string()),
+                    Some(Tab::Email(ev, _)) => Some(ev.raw_body().to_string()),
                     _ => None,
                 };
                 if let Some(raw) = raw
@@ -828,8 +856,13 @@ impl App {
         }
     }
 
+    fn current_account_idx(&self) -> usize {
+        self.mb_accounts.get(self.current_mb).copied().unwrap_or(0)
+    }
+
     fn delete_selected_thread(&mut self) {
-        let trash_idx = self.trash_idx();
+        let acct_idx = self.current_account_idx();
+        let trash_idx = self.trash_idx(acct_idx);
         if let Some(idx) = trash_idx
             && idx != self.current_mb
         {
@@ -851,18 +884,20 @@ impl App {
 
     fn delete_current_tab_email(&mut self) {
         let ei = self.current_tab.saturating_sub(1);
-        let Some(Tab::Email(ev)) = self.tabs.get(ei) else {
+        let Some(Tab::Email(ev, acct_idx)) = self.tabs.get(ei) else {
             return;
         };
         let id = ev.message_id().to_string();
-        let trash_idx = self.trash_idx();
+        let acct_idx = *acct_idx;
+        let trash_idx = self.trash_idx(acct_idx);
 
         if let Some(trash_idx) = trash_idx {
-            // Find which mailbox owns this email and move it to trash.
+            // Find which mailbox in this account owns this email and move it to trash.
             if let Some(src_idx) = self
                 .maildirs
                 .iter()
-                .position(|md| md.find_by_id(&id).is_some())
+                .enumerate()
+                .position(|(i, md)| self.mb_accounts[i] == acct_idx && md.find_by_id(&id).is_some())
                 && src_idx != trash_idx
             {
                 self.move_email_by_id(&id, src_idx, trash_idx);
@@ -919,8 +954,8 @@ impl App {
             .get(self.current_mb)
             .and_then(|tv| tv.selected());
         let Some(thread) = thread else { return };
+        let acct_idx = self.current_account_idx();
         let is_drafts = self
-            .config
             .mailboxes
             .get(self.current_mb)
             .is_some_and(|mb| mb.is_drafts());
@@ -936,25 +971,28 @@ impl App {
                 Ok((draft, attachments)) => {
                     let mut editor = Editor::new(&draft);
                     editor.attachments = attachments;
-                    self.tabs
-                        .push(Tab::Compose(Box::new(editor), ComposeKind::New));
+                    self.tabs.push(Tab::Compose(
+                        Box::new(editor),
+                        ComposeKind::New,
+                        acct_idx,
+                    ));
                     self.current_tab = self.tabs.len();
                 }
                 Err(e) => self.status_error = Some(format!("{e:#?}")),
             }
         } else {
             thread.parent.mark(Flag::Seen);
-            self.open_email(&thread.parent);
+            self.open_email(&thread.parent, acct_idx);
         }
     }
 
-    fn open_email(&mut self, email: &Email) {
+    fn open_email(&mut self, email: &Email, acct_idx: usize) {
         if self.current_tab == 0 {
             // Main view: switch to existing tab or append a new one.
             if let Some(i) = self
                 .tabs
                 .iter()
-                .position(|t| matches!(t, Tab::Email(ev) if ev.message_id() == email.message_id))
+                .position(|t| matches!(t, Tab::Email(ev, _) if ev.message_id() == email.message_id))
             {
                 self.current_tab = i + 1;
                 return;
@@ -975,7 +1013,7 @@ impl App {
         let gpg_binary = self.config.gpg_binary().to_string();
         if self.current_tab == 0 {
             if let Ok(ev) = EmailView::new(email, &gpg_binary, &mut before_gpg, &mut after_gpg) {
-                self.tabs.push(Tab::Email(Box::new(ev)));
+                self.tabs.push(Tab::Email(Box::new(ev), acct_idx));
                 self.current_tab = self.tabs.len();
             }
         } else {
@@ -983,7 +1021,7 @@ impl App {
             if let Ok(ev) = EmailView::new(email, &gpg_binary, &mut before_gpg, &mut after_gpg)
                 && let Some(slot) = self.tabs.get_mut(ei)
             {
-                *slot = Tab::Email(Box::new(ev));
+                *slot = Tab::Email(Box::new(ev), acct_idx);
             }
         }
 
@@ -1004,9 +1042,29 @@ impl App {
         // else: current_tab now points to the next tab
     }
 
+    fn account_signature(&self, acct_idx: usize) -> Option<String> {
+        self.config
+            .accounts
+            .get(acct_idx)
+            .and_then(|a| a.load_signature())
+    }
+
+    fn account_username(&self, acct_idx: usize) -> &str {
+        self.config
+            .accounts
+            .get(acct_idx)
+            .map(|a| a.smtp.username.as_str())
+            .unwrap_or("")
+    }
+
     fn compose(&mut self) {
-        let sig = config::load_signature();
-        self.open_editor(compose::compose_draft(sig.as_deref()), ComposeKind::New);
+        let acct_idx = self.current_account_idx();
+        let sig = self.account_signature(acct_idx);
+        self.open_editor(
+            compose::compose_draft(sig.as_deref()),
+            ComposeKind::New,
+            acct_idx,
+        );
     }
 
     fn open_reply_from_thread(&mut self, quote: bool) {
@@ -1017,29 +1075,30 @@ impl App {
         else {
             return;
         };
+        let acct_idx = self.current_account_idx();
         let id = thread.parent.message_id.clone();
-        let sig = config::load_signature();
-        match thread
-            .parent
-            .reply_draft(quote, &self.config.smtp.username, sig.as_deref())
-        {
-            Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
+        let sig = self.account_signature(acct_idx);
+        let username = self.account_username(acct_idx).to_string();
+        match thread.parent.reply_draft(quote, &username, sig.as_deref()) {
+            Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id), acct_idx),
             Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
     }
 
     fn open_reply_from_tab(&mut self, quote: bool) {
         let ei = self.current_tab.saturating_sub(1);
-        let Some(Tab::Email(ev)) = self.tabs.get(ei) else {
+        let Some(Tab::Email(ev, acct_idx)) = self.tabs.get(ei) else {
             return;
         };
+        let acct_idx = *acct_idx;
         let path = ev.path().to_path_buf();
-        let sig = config::load_signature();
+        let sig = self.account_signature(acct_idx);
+        let username = self.account_username(acct_idx).to_string();
         match Email::from_file(&path) {
             Ok(email) => {
                 let id = email.message_id.clone();
-                match email.reply_draft(quote, &self.config.smtp.username, sig.as_deref()) {
-                    Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
+                match email.reply_draft(quote, &username, sig.as_deref()) {
+                    Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id), acct_idx),
                     Err(e) => self.status_error = Some(format!("{e:#?}")),
                 }
             }
@@ -1059,14 +1118,15 @@ impl App {
         else {
             return;
         };
+        let acct_idx = self.current_account_idx();
         let id = thread.parent.message_id.clone();
-        let sig = config::load_signature();
-        match thread.parent.quick_reply_draft(
-            &template,
-            &self.config.smtp.username,
-            sig.as_deref(),
-        ) {
-            Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
+        let sig = self.account_signature(acct_idx);
+        let username = self.account_username(acct_idx).to_string();
+        match thread
+            .parent
+            .quick_reply_draft(&template, &username, sig.as_deref())
+        {
+            Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id), acct_idx),
             Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
     }
@@ -1077,20 +1137,18 @@ impl App {
             return;
         };
         let ei = self.current_tab.saturating_sub(1);
-        let Some(Tab::Email(ev)) = self.tabs.get(ei) else {
+        let Some(Tab::Email(ev, acct_idx)) = self.tabs.get(ei) else {
             return;
         };
+        let acct_idx = *acct_idx;
         let path = ev.path().to_path_buf();
-        let sig = config::load_signature();
+        let sig = self.account_signature(acct_idx);
+        let username = self.account_username(acct_idx).to_string();
         match Email::from_file(&path) {
             Ok(email) => {
                 let id = email.message_id.clone();
-                match email.quick_reply_draft(
-                    &template,
-                    &self.config.smtp.username,
-                    sig.as_deref(),
-                ) {
-                    Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
+                match email.quick_reply_draft(&template, &username, sig.as_deref()) {
+                    Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id), acct_idx),
                     Err(e) => self.status_error = Some(format!("{e:#?}")),
                 }
             }
@@ -1106,26 +1164,28 @@ impl App {
         else {
             return;
         };
+        let acct_idx = self.current_account_idx();
         let id = thread.parent.message_id.clone();
-        let sig = config::load_signature();
+        let sig = self.account_signature(acct_idx);
         match thread.parent.forward_draft(sig.as_deref()) {
-            Ok(draft) => self.open_editor(draft, ComposeKind::Forward(id)),
+            Ok(draft) => self.open_editor(draft, ComposeKind::Forward(id), acct_idx),
             Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
     }
 
     fn open_forward_from_tab(&mut self) {
         let ei = self.current_tab.saturating_sub(1);
-        let Some(Tab::Email(ev)) = self.tabs.get(ei) else {
+        let Some(Tab::Email(ev, acct_idx)) = self.tabs.get(ei) else {
             return;
         };
+        let acct_idx = *acct_idx;
         let path = ev.path().to_path_buf();
-        let sig = config::load_signature();
+        let sig = self.account_signature(acct_idx);
         match Email::from_file(&path) {
             Ok(email) => {
                 let id = email.message_id.clone();
                 match email.forward_draft(sig.as_deref()) {
-                    Ok(draft) => self.open_editor(draft, ComposeKind::Forward(id)),
+                    Ok(draft) => self.open_editor(draft, ComposeKind::Forward(id), acct_idx),
                     Err(e) => self.status_error = Some(format!("{e:#?}")),
                 }
             }
@@ -1133,9 +1193,9 @@ impl App {
         }
     }
 
-    fn open_editor(&mut self, draft: String, kind: ComposeKind) {
+    fn open_editor(&mut self, draft: String, kind: ComposeKind, acct_idx: usize) {
         self.tabs
-            .push(Tab::Compose(Box::new(Editor::new(&draft)), kind));
+            .push(Tab::Compose(Box::new(Editor::new(&draft)), kind, acct_idx));
         self.current_tab = self.tabs.len();
     }
 
@@ -1161,11 +1221,11 @@ impl App {
 
     fn move_targets(&self) -> impl Iterator<Item = (usize, &Mailbox)> {
         let current = self.current_mb;
-        self.config
-            .mailboxes
+        let acct_idx = self.current_account_idx();
+        self.mailboxes
             .iter()
             .enumerate()
-            .filter(move |(i, mb)| *i != current && !mb.is_drafts())
+            .filter(move |(i, mb)| self.mb_accounts[*i] == acct_idx && *i != current && !mb.is_drafts())
     }
 
     fn activate_move_mode(&mut self, thread: bool) {
@@ -1220,8 +1280,11 @@ impl App {
         }
     }
 
-    fn trash_idx(&self) -> Option<usize> {
-        self.config.mailboxes.iter().position(|mb| mb.is_trash())
+    fn trash_idx(&self, acct_idx: usize) -> Option<usize> {
+        self.mailboxes
+            .iter()
+            .enumerate()
+            .position(|(i, mb)| self.mb_accounts[i] == acct_idx && mb.is_trash())
     }
 
     fn move_email_by_id(&mut self, message_id: &str, src_idx: usize, target_idx: usize) {
@@ -1580,8 +1643,10 @@ mod tests {
         }
     }
 
-    fn make_config(mailboxes: Vec<config::Mailbox>) -> Config {
-        Config {
+    fn make_account(name: &str, mailboxes: Vec<config::Mailbox>) -> config::Account {
+        config::Account {
+            name: name.to_string(),
+            dir: std::path::PathBuf::new(),
             mailboxes,
             smtp: config::Smtp {
                 host: String::new(),
@@ -1590,26 +1655,57 @@ mod tests {
                 name: None,
                 password: String::new(),
             },
-            sync: None,
-            gpg: None,
-            status: None,
         }
     }
 
-    fn make_app(mailboxes: Vec<config::Mailbox>) -> App {
-        let cfg = make_config(mailboxes);
-        let maildirs: Vec<Maildir> = cfg.mailboxes.iter().map(|_| Maildir::default()).collect();
-        let threads: Vec<ThreadsView> = maildirs
-            .iter()
-            .map(|c| ThreadsView::new(c.threads()))
-            .collect();
-        let mut sidebar_state = ListState::default();
-        if !cfg.mailboxes.is_empty() {
-            sidebar_state.select(Some(0));
+    fn make_config(mailboxes: Vec<config::Mailbox>) -> Config {
+        let accounts = if mailboxes.is_empty() {
+            Vec::new()
+        } else {
+            vec![make_account("default", mailboxes)]
+        };
+        Config {
+            sync: None,
+            gpg: None,
+            status: None,
+            accounts,
         }
+    }
+
+    fn make_multi_app(accounts: Vec<config::Account>) -> App {
+        let mut mailboxes = Vec::new();
+        let mut mb_accounts = Vec::new();
+        let mut maildirs = Vec::new();
+        let mut threads = Vec::new();
+        let mut address_books = Vec::new();
+
+        for (acct_idx, acct) in accounts.iter().enumerate() {
+            for mb in &acct.mailboxes {
+                let md = Maildir::new(&mb.path).unwrap_or_default();
+                let tv = ThreadsView::new(md.threads());
+                mailboxes.push(mb.clone());
+                mb_accounts.push(acct_idx);
+                maildirs.push(md);
+                threads.push(tv);
+            }
+            address_books.push(AddressBook::default());
+        }
+
+        let mut sidebar_state = ListState::default();
+        sidebar_state.select(draw::sidebar_row_for_mailbox(&accounts, 0));
+
+        let cfg = Config {
+            sync: None,
+            gpg: None,
+            status: None,
+            accounts,
+        };
+
         App {
             sidebar_state,
             config: cfg,
+            mailboxes,
+            mb_accounts,
             maildirs,
             threads,
             tabs: Vec::new(),
@@ -1626,9 +1722,14 @@ mod tests {
             help: None,
             status_error: None,
             terminal: None,
-            address_book: AddressBook::load(),
+            address_books,
             clipboard: Clipboard::new().ok(),
         }
+    }
+
+    fn make_app(mailboxes: Vec<config::Mailbox>) -> App {
+        let cfg = make_config(mailboxes);
+        make_multi_app(cfg.accounts)
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -1651,7 +1752,7 @@ mod tests {
 
     fn push_tab(app: &mut App, subject: &str) {
         app.tabs
-            .push(Tab::Email(Box::new(EmailView::new_stub(subject))));
+            .push(Tab::Email(Box::new(EmailView::new_stub(subject)), 0));
         app.current_tab = app.tabs.len();
     }
 
@@ -1708,7 +1809,7 @@ mod tests {
         // Pressing 'C' a second time now opens the compose tab.
         assert!(app.handle_key(key(KeyCode::Char('C'))));
         assert_eq!(app.tabs.len(), 1);
-        assert!(matches!(app.tabs[0], Tab::Compose(_, _)));
+        assert!(matches!(app.tabs[0], Tab::Compose(_, _, 0)));
     }
 
     #[test]
@@ -1803,7 +1904,7 @@ mod tests {
     fn capital_j_moves_current_mb_down() {
         let mut app = make_app(vec![mb("Inbox", "/inbox"), mb("Sent", "/sent")]);
         app.handle_key(key(KeyCode::Char('J')));
-        assert_eq!(app.config.mailboxes[app.current_mb].label, "Sent");
+        assert_eq!(app.mailboxes[app.current_mb].label, "Sent");
         assert_eq!(app.current_mb, 1);
     }
 
@@ -1812,7 +1913,7 @@ mod tests {
         let mut app = make_app(vec![mb("Inbox", "/inbox"), mb("Sent", "/sent")]);
         app.handle_key(key(KeyCode::Char('J')));
         app.handle_key(key(KeyCode::Char('K')));
-        assert_eq!(app.config.mailboxes[app.current_mb].label, "Inbox");
+        assert_eq!(app.mailboxes[app.current_mb].label, "Inbox");
         assert_eq!(app.current_mb, 0);
     }
 
@@ -2115,6 +2216,7 @@ mod tests {
         h: u16,
     ) -> Vec<String> {
         use ratatui::{Terminal, backend::TestBackend};
+        let accounts = vec![make_account("default", mailboxes.to_vec())];
         let backend = TestBackend::new(w, h);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -2123,7 +2225,7 @@ mod tests {
                     frame,
                     ratatui::layout::Rect::new(0, 0, w, h),
                     state,
-                    mailboxes,
+                    &accounts,
                     maildirs,
                     unread_filters,
                     flagged_filters,
@@ -2150,24 +2252,26 @@ mod tests {
     #[test]
     fn new_nonempty_mailboxes_selects_first_in_sidebar() {
         let app = make_app(vec![mb("Inbox", "/inbox"), mb("Sent", "/sent")]);
-        assert_eq!(app.sidebar_state.selected(), Some(0));
+        // Row 0 is the account header; row 1 is the first mailbox.
+        assert_eq!(app.sidebar_state.selected(), Some(1));
         assert_eq!(app.current_mb, 0);
     }
 
     #[test]
     fn draw_sidebar_shows_mailbox_title() {
         let mut state = ListState::default();
-        state.select(Some(0));
+        state.select(Some(1));
         let mailboxes = vec![mb("Inbox", "/inbox"), mb("Sent", "/sent")];
         let lines = rendered_sidebar_lines(&mut state, &mailboxes, &[], &[], &[], 30, 6);
         let content: String = lines.join("\n");
+        assert!(content.contains("default"), "got:\n{}", content);
         assert!(content.contains("Inbox"), "got:\n{}", content);
     }
 
     #[test]
     fn draw_sidebar_renders_all_labels() {
         let mut state = ListState::default();
-        state.select(Some(0));
+        state.select(Some(1));
         let mailboxes = vec![
             mb("Inbox", "/inbox"),
             mb("Sent", "/sent"),
@@ -2185,7 +2289,7 @@ mod tests {
         use crate::core::maildir::Maildir;
 
         let mut state = ListState::default();
-        state.select(Some(0));
+        state.select(Some(1));
         let mailboxes = vec![mb("Inbox", "/mail/inbox")];
         // Maildir with unread emails will show count
         let maildirs = vec![Maildir::default()];
@@ -2205,8 +2309,68 @@ mod tests {
         terminal
             .draw(|frame| draw::draw_main(frame, frame.area(), &mut app))
             .unwrap();
-        // After draw_main, sidebar_state should be synced with current_mb
-        assert_eq!(app.sidebar_state.selected(), Some(1));
+        // Row 0 = header, row 1 = Inbox (mb 0), row 2 = Sent (mb 1)
+        assert_eq!(app.sidebar_state.selected(), Some(2));
+    }
+
+    #[test]
+    fn multi_account_sidebar_skips_headers_and_scopes_move_and_trash() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let acct0_inbox = make_maildir_dir();
+        let acct0_trash = make_maildir_dir();
+        let acct1_inbox = make_maildir_dir();
+        let acct1_sent = make_maildir_dir();
+        let acct1_trash = make_maildir_dir();
+
+        let src_path = write_test_email(&acct1_inbox, "msg1:2,S");
+
+        let acct0 = make_account(
+            "personal",
+            vec![
+                mb("Inbox", acct0_inbox.to_str().unwrap()),
+                mb("Trash", acct0_trash.to_str().unwrap()),
+            ],
+        );
+        let acct1 = make_account(
+            "work",
+            vec![
+                mb("Inbox", acct1_inbox.to_str().unwrap()),
+                mb("Sent", acct1_sent.to_str().unwrap()),
+                mb("Trash", acct1_trash.to_str().unwrap()),
+            ],
+        );
+        let mut app = make_multi_app(vec![acct0, acct1]);
+
+        // Step across accounts with J: 0 (personal/Inbox) -> 1 (personal/Trash) -> 2 (work/Inbox)
+        app.handle_key(key(KeyCode::Char('J')));
+        app.handle_key(key(KeyCode::Char('J')));
+        assert_eq!(app.current_mb, 2);
+        assert_eq!(app.current_account_idx(), 1);
+
+        // Sidebar visual row for work/Inbox:
+        // 0: personal, 1: Inbox, 2: Trash, 3: work, 4: Inbox
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw::draw_main(frame, frame.area(), &mut app))
+            .unwrap();
+        assert_eq!(app.sidebar_state.selected(), Some(4));
+
+        // Move targets for work/Inbox only include work's non-Drafts mailboxes (Sent, Trash)
+        let targets: Vec<_> = app.move_targets().map(|(_, m)| m.label.as_str()).collect();
+        assert_eq!(targets, vec!["Sent", "Trash"]);
+
+        // Deleting in work/Inbox moves to work/Trash, not personal/Trash
+        app.delete_selected_thread();
+        assert!(!src_path.exists());
+        assert!(acct1_trash.join("cur").join("msg1:2,S").exists());
+        assert!(!acct0_trash.join("cur").join("msg1:2,S").exists());
+
+        let _ = std::fs::remove_dir_all(&acct0_inbox);
+        let _ = std::fs::remove_dir_all(&acct0_trash);
+        let _ = std::fs::remove_dir_all(&acct1_inbox);
+        let _ = std::fs::remove_dir_all(&acct1_sent);
+        let _ = std::fs::remove_dir_all(&acct1_trash);
     }
 
     // ── search ───────────────────────────────────────────────────────────────
@@ -2295,42 +2459,7 @@ mod tests {
                 markers: false,
             })
             .collect();
-        let cfg = make_config(mailboxes);
-        let maildirs: Vec<Maildir> = cfg
-            .mailboxes
-            .iter()
-            .map(|m| Maildir::new(&m.path).unwrap())
-            .collect();
-        let threads: Vec<ThreadsView> = maildirs
-            .iter()
-            .map(|m| ThreadsView::new(m.threads()))
-            .collect();
-        let mut sidebar_state = ListState::default();
-        if !cfg.mailboxes.is_empty() {
-            sidebar_state.select(Some(0));
-        }
-        App {
-            sidebar_state,
-            config: cfg,
-            maildirs,
-            threads,
-            tabs: Vec::new(),
-            current_tab: 0,
-            current_mb: 0,
-            pending_sync: None,
-            sync_error: None,
-            sending: false,
-            search: SearchMode::Off,
-            sender_search: SearchMode::Off,
-            last_search: LastSearch::Subject,
-            move_mode: MoveMode::Off,
-            send_mode: SendMode::Off,
-            help: None,
-            status_error: None,
-            terminal: None,
-            address_book: AddressBook::load(),
-            clipboard: Clipboard::new().ok(),
-        }
+        make_app(mailboxes)
     }
 
     fn write_test_email(dir: &std::path::Path, filename: &str) -> std::path::PathBuf {
@@ -2353,14 +2482,14 @@ mod tests {
         let file = dir.join("document.pdf");
         std::fs::write(&file, [0, 1, 255]).unwrap();
         let mut app = make_app_with_labeled_dirs(&["Drafts".to_string()], &[&dir]);
-        app.config.smtp.username = "me@x.com".to_string();
+        app.config.accounts[0].smtp.username = "me@x.com".to_string();
         let mut editor = Editor::new("To: \nSubject: File\n--- body ---\nBody");
         editor
             .attachments
             .push(crate::core::attachment::Attachment::from_file(&file).unwrap());
         std::fs::remove_file(&file).unwrap();
         app.tabs
-            .push(Tab::Compose(Box::new(editor), ComposeKind::New));
+            .push(Tab::Compose(Box::new(editor), ComposeKind::New, 0));
         app.current_tab = 1;
         // No recipients: message building fails before SMTP is contacted.
         app.execute_send_action(&SendAction::Send);
@@ -2371,14 +2500,14 @@ mod tests {
         assert!(app.tabs.is_empty());
         assert_eq!(app.maildirs[0].email_count(), 1);
         app.open_selected_email();
-        let Some(Tab::Compose(ed, _)) = app.tabs.first() else {
+        let Some(Tab::Compose(ed, _, 0)) = app.tabs.first() else {
             panic!("draft not reopened")
         };
         assert_eq!(ed.attachments[0].name, "document.pdf");
         assert_eq!(ed.attachments[0].data, [0, 1, 255]);
         assert!(ed.text().contains("Body"));
         // A save failure also leaves the complete editor available.
-        app.config.smtp.username.clear();
+        app.config.accounts[0].smtp.username.clear();
         app.execute_send_action(&SendAction::SaveDraft);
         assert_eq!(app.tabs.len(), 1);
         assert!(app.status_error.is_some());
