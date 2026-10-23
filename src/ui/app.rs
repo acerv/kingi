@@ -1037,7 +1037,8 @@ impl App {
     }
 
     fn compose(&mut self) {
-        self.open_editor(compose::compose_draft(), ComposeKind::New);
+        let sig = config::load_signature();
+        self.open_editor(compose::compose_draft(sig.as_deref()), ComposeKind::New);
     }
 
     fn open_reply_from_thread(&mut self, quote: bool) {
@@ -1049,7 +1050,11 @@ impl App {
             return;
         };
         let id = thread.parent.message_id.clone();
-        match thread.parent.reply_draft(quote, &self.config.smtp.username) {
+        let sig = config::load_signature();
+        match thread
+            .parent
+            .reply_draft(quote, &self.config.smtp.username, sig.as_deref())
+        {
             Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
             Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
@@ -1061,10 +1066,11 @@ impl App {
             return;
         };
         let path = ev.path().to_path_buf();
+        let sig = config::load_signature();
         match Email::from_file(&path) {
             Ok(email) => {
                 let id = email.message_id.clone();
-                match email.reply_draft(quote, &self.config.smtp.username) {
+                match email.reply_draft(quote, &self.config.smtp.username, sig.as_deref()) {
                     Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
                     Err(e) => self.status_error = Some(format!("{e:#?}")),
                 }
@@ -1086,10 +1092,12 @@ impl App {
             return;
         };
         let id = thread.parent.message_id.clone();
-        match thread
-            .parent
-            .quick_reply_draft(&template, &self.config.smtp.username)
-        {
+        let sig = config::load_signature();
+        match thread.parent.quick_reply_draft(
+            &template,
+            &self.config.smtp.username,
+            sig.as_deref(),
+        ) {
             Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
             Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
@@ -1105,10 +1113,15 @@ impl App {
             return;
         };
         let path = ev.path().to_path_buf();
+        let sig = config::load_signature();
         match Email::from_file(&path) {
             Ok(email) => {
                 let id = email.message_id.clone();
-                match email.quick_reply_draft(&template, &self.config.smtp.username) {
+                match email.quick_reply_draft(
+                    &template,
+                    &self.config.smtp.username,
+                    sig.as_deref(),
+                ) {
                     Ok(draft) => self.open_editor(draft, ComposeKind::Reply(id)),
                     Err(e) => self.status_error = Some(format!("{e:#?}")),
                 }
@@ -1126,7 +1139,8 @@ impl App {
             return;
         };
         let id = thread.parent.message_id.clone();
-        match thread.parent.forward_draft() {
+        let sig = config::load_signature();
+        match thread.parent.forward_draft(sig.as_deref()) {
             Ok(draft) => self.open_editor(draft, ComposeKind::Forward(id)),
             Err(e) => self.status_error = Some(format!("{e:#?}")),
         }
@@ -1138,10 +1152,11 @@ impl App {
             return;
         };
         let path = ev.path().to_path_buf();
+        let sig = config::load_signature();
         match Email::from_file(&path) {
             Ok(email) => {
                 let id = email.message_id.clone();
-                match email.forward_draft() {
+                match email.forward_draft(sig.as_deref()) {
                     Ok(draft) => self.open_editor(draft, ComposeKind::Forward(id)),
                     Err(e) => self.status_error = Some(format!("{e:#?}")),
                 }
