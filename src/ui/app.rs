@@ -245,7 +245,7 @@ impl App {
                 }
                 // Notify per mailbox if new emails arrived
                 for (i, new_emails) in new_per_mailbox.iter().enumerate() {
-                    if !new_emails.is_empty() {
+                    if !new_emails.is_empty() && self.mailboxes[i].notifications {
                         let acct_idx = self.mb_accounts[i];
                         let acct_name = &self.config.accounts[acct_idx].name;
                         let label = format!("{acct_name}: {}", self.mailboxes[i].label);
@@ -1640,6 +1640,7 @@ mod tests {
             label: label.to_string(),
             path: path.to_string(),
             markers: false,
+            notifications: false,
         }
     }
 
@@ -2457,6 +2458,7 @@ mod tests {
                 label: label.clone(),
                 path: d.to_str().unwrap().to_string(),
                 markers: false,
+                notifications: false,
             })
             .collect();
         make_app(mailboxes)

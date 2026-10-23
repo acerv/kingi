@@ -10,6 +10,8 @@ pub struct Mailbox {
     pub path: String,
     #[serde(default)]
     pub markers: bool,
+    #[serde(default)]
+    pub notifications: bool,
 }
 
 impl Mailbox {
@@ -81,6 +83,7 @@ impl Account {
                 label: "Drafts".to_string(),
                 path: self.dir.join("drafts").to_string_lossy().into_owned(),
                 markers: false,
+                notifications: false,
             });
         }
 
@@ -89,6 +92,7 @@ impl Account {
                 label: "Trash".to_string(),
                 path: self.dir.join("trash").to_string_lossy().into_owned(),
                 markers: false,
+                notifications: false,
             });
         }
     }
@@ -133,9 +137,10 @@ username = \"you@example.com\"
 password = \"secret\"
 
 [[mailbox]]
-label   = \"INBOX\"
-path    = \"/home/you/Mail/INBOX/\"
-markers = false
+label         = \"INBOX\"
+path          = \"/home/you/Mail/INBOX/\"
+markers       = false
+notifications = false
 ";
 
 impl Config {
@@ -537,6 +542,7 @@ password = "pass"
             label: label.to_string(),
             path: String::new(),
             markers: false,
+            notifications: false,
         }
     }
 
@@ -675,7 +681,32 @@ password = "pass"
         with_xdg(&dir, || {
             let config = Config::load().unwrap();
             assert!(config.accounts[0].mailboxes[0].markers);
+            assert!(!config.accounts[0].mailboxes[0].notifications);
             assert_eq!(config.merged_markers(), vec!["applied", "merged"]);
+        });
+    }
+
+    #[test]
+    fn config_load_mailbox_notifications_flag() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir();
+        let kingi_dir = dir.join("kingi");
+        let acct_toml = r#"
+[[mailbox]]
+label = "Inbox"
+path = "/mail/inbox"
+notifications = true
+
+[smtp]
+host = "smtp.example.com"
+port = 587
+username = "user"
+password = "pass"
+"#;
+        write_account(&kingi_dir, "work", acct_toml);
+        with_xdg(&dir, || {
+            let config = Config::load().unwrap();
+            assert!(config.accounts[0].mailboxes[0].notifications);
         });
     }
 
