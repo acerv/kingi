@@ -33,7 +33,7 @@ cargo install --path .
 
 ## Configuration
 
-Create `~/.config/kingi/config.toml`:
+Create `~/.config/kingi/accounts/<account>/account.toml` for each account:
 
 ```toml
 [smtp]
@@ -49,7 +49,7 @@ path  = "/home/you/Mail/INBOX/"
 markers = true  # Enables patch status tracking (merged, reviewed, superseded)
 
 # "Drafts" and "Trash" labels are treated specially.
-# If omitted, defaults are created under ~/.config/kingi/.
+# If omitted, defaults are created in the account directory.
 [[mailbox]]
 label = "Drafts"
 path  = "/home/you/Mail/Drafts/"
@@ -57,7 +57,11 @@ path  = "/home/you/Mail/Drafts/"
 [[mailbox]]
 label = "Trash"
 path  = "/home/you/Mail/Trash/"
+```
 
+Global settings go in `~/.config/kingi/config.toml`:
+
+```toml
 # Optional: run a shell command every N seconds to sync mail.
 # timeout defaults to 60 seconds if omitted.
 [sync]
@@ -82,8 +86,8 @@ merged_markers = [
 ]
 ```
 
-A plain-text `~/.config/kingi/signature` file, if present, is appended to
-every draft.
+A plain-text `~/.config/kingi/accounts/<account>/signature` file, if present,
+is appended to every draft.
 
 ### Quick replies
 
