@@ -155,7 +155,7 @@ available for retry.
 | `j`/`k`/`↑`/`↓`   | Move selection                           |
 | `Ctrl+D`/`Ctrl+U` | Page down / up                           |
 | `g` / `G`         | First / last email                       |
-| `J` / `K`         | Next / previous mailbox                  |
+| `J` / `K`         | Next / previous mailbox (circular)       |
 | `s`               | Toggle sort order                        |
 | `V`               | Toggle unread-only filter                |
 | `F`               | Toggle flagged-only filter               |
