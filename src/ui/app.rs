@@ -1209,14 +1209,19 @@ impl App {
     }
 
     fn next_mailbox(&mut self) {
-        self.current_mb = self
-            .current_mb
-            .saturating_add(1)
-            .min(self.maildirs.len().saturating_sub(1));
+        let total = self.maildirs.len();
+        if total == 0 {
+            return;
+        }
+        self.current_mb = (self.current_mb + 1) % total;
     }
 
     fn prev_mailbox(&mut self) {
-        self.current_mb = self.current_mb.saturating_sub(1);
+        let total = self.maildirs.len();
+        if total == 0 {
+            return;
+        }
+        self.current_mb = (self.current_mb + total - 1) % total;
     }
 
     fn move_targets(&self) -> impl Iterator<Item = (usize, &Mailbox)> {
@@ -1919,18 +1924,25 @@ mod tests {
     }
 
     #[test]
-    fn capital_j_clamped_at_last_mailbox() {
-        let mut app = make_app(vec![mb("Inbox", "/inbox")]);
+    fn capital_j_wraps_to_first_mailbox() {
+        let mut app = make_app(vec![mb("Inbox", "/inbox"), mb("Sent", "/sent")]);
         app.handle_key(key(KeyCode::Char('J')));
         app.handle_key(key(KeyCode::Char('J')));
         assert_eq!(app.current_mb, 0);
     }
 
     #[test]
-    fn capital_k_clamped_at_first_mailbox() {
+    fn capital_j_single_mailbox_stays() {
+        let mut app = make_app(vec![mb("Inbox", "/inbox")]);
+        app.handle_key(key(KeyCode::Char('J')));
+        assert_eq!(app.current_mb, 0);
+    }
+
+    #[test]
+    fn capital_k_wraps_to_last_mailbox() {
         let mut app = make_app(vec![mb("Inbox", "/inbox"), mb("Sent", "/sent")]);
         app.handle_key(key(KeyCode::Char('K')));
-        assert_eq!(app.current_mb, 0);
+        assert_eq!(app.current_mb, 1);
     }
 
     #[test]
