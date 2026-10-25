@@ -223,6 +223,16 @@ impl Maildir {
             .count()
     }
 
+    /// Timestamp of the most recent unread email in this mailbox, or `None`
+    /// when there are no unread emails with a valid `Date:` header.
+    pub fn newest_unread_timestamp(&self) -> Option<i64> {
+        self.lookup
+            .values()
+            .filter(|t| t.parent.is_unread())
+            .filter_map(|t| t.parent.timestamp)
+            .max()
+    }
+
     /// Remove the thread node whose on-disk path matches `path` from the tree,
     /// along with all its children.  The corresponding entries are also removed
     /// from the internal `lookup` table so they can be re-inserted later.
@@ -1336,6 +1346,54 @@ mod tests {
             new_emails.is_empty(),
             "renamed parent and re-linked child must not be reported as new"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Maildir::newest_unread_timestamp ───────────────────────────────────────
+
+    #[test]
+    fn newest_unread_timestamp_empty_is_none() {
+        assert_eq!(Maildir::default().newest_unread_timestamp(), None);
+    }
+
+    #[test]
+    fn newest_unread_timestamp_all_read_is_none() {
+        let dir = make_maildir();
+        write_msg(
+            &dir,
+            "cur",
+            "a:2,S",
+            &email_content("a@test", None, "Mon, 01 Jan 2024 00:00:00 +0000"),
+        );
+        let maildir = Maildir::new(dir.to_str().unwrap()).unwrap();
+        assert_eq!(maildir.newest_unread_timestamp(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn newest_unread_timestamp_ignores_read_emails() {
+        let dir = make_maildir();
+        write_msg(
+            &dir,
+            "new",
+            "old",
+            &email_content("old@test", None, "Mon, 01 Jan 2024 00:00:00 +0000"),
+        );
+        write_msg(
+            &dir,
+            "cur",
+            "mid:2,",
+            &email_content("mid@test", None, "Tue, 02 Jan 2024 00:00:00 +0000"),
+        );
+        write_msg(
+            &dir,
+            "cur",
+            "newest:2,S",
+            &email_content("newest@test", None, "Wed, 03 Jan 2024 00:00:00 +0000"),
+        );
+        let maildir = Maildir::new(dir.to_str().unwrap()).unwrap();
+        // 2024-01-02T00:00:00Z
+        assert_eq!(maildir.newest_unread_timestamp(), Some(1_704_153_600));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
