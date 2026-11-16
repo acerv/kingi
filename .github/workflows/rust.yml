@@ -11,14 +11,20 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Install rustfmt & clippy
+      run: rustup component add rustfmt clippy
     - name: Build
       run: cargo build --verbose
     - name: Linting
-      run: cargo clippy
+      run: cargo clippy --all-targets
     - name: Testing
       run: cargo test
+    - name: PR Validation Gate
+      if: github.event_name == 'pull_request'
+      run: .agents/scripts/validate.sh --base "origin/${{ github.base_ref }}"

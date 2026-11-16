@@ -23,6 +23,7 @@ cargo install --path .
 - Drafts and Trash mailboxes (auto-created if not configured)
 - Read/unread tracking, flagging, live search, unread-only filter
 - Multiple mailboxes with sidebar, tab-based email viewing
+- Jump to the next mailbox with unread mail, most recent first
 - Move emails or entire threads between mailboxes
 - SMTP sending via STARTTLS
 - Periodic background sync via a configurable shell command (e.g. `mbsync`)
@@ -155,7 +156,8 @@ available for retry.
 | `j`/`k`/`↑`/`↓`   | Move selection                           |
 | `Ctrl+D`/`Ctrl+U` | Page down / up                           |
 | `g` / `G`         | First / last email                       |
-| `J` / `K`         | Next / previous mailbox                  |
+| `J` / `K`         | Next / previous mailbox (circular)       |
+| `n`               | Next mailbox with unread mail            |
 | `s`               | Toggle sort order                        |
 | `V`               | Toggle unread-only filter                |
 | `F`               | Toggle flagged-only filter               |

@@ -1,0 +1,16 @@
+{
+  "kingi-git-safety": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ./scripts/pre_tool_guard.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

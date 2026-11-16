@@ -397,6 +397,11 @@ impl App {
             }
             (_, KeyCode::Char('J')) => self.next_mailbox(),
             (_, KeyCode::Char('K')) => self.prev_mailbox(),
+            (_, KeyCode::Char('n')) => {
+                if let Some(idx) = self.next_unread_mailbox() {
+                    self.current_mb = idx;
+                }
+            }
             (_, KeyCode::Char('j') | KeyCode::Down) => {
                 if let Some(tv) = self.threads.get_mut(self.current_mb) {
                     tv.next_email(1);
@@ -1209,14 +1214,42 @@ impl App {
     }
 
     fn next_mailbox(&mut self) {
-        self.current_mb = self
-            .current_mb
-            .saturating_add(1)
-            .min(self.maildirs.len().saturating_sub(1));
+        let total = self.maildirs.len();
+        if total == 0 {
+            return;
+        }
+        self.current_mb = (self.current_mb + 1) % total;
     }
 
     fn prev_mailbox(&mut self) {
-        self.current_mb = self.current_mb.saturating_sub(1);
+        let total = self.maildirs.len();
+        if total == 0 {
+            return;
+        }
+        self.current_mb = (self.current_mb + total - 1) % total;
+    }
+
+    /// Return the next mailbox with unread emails, IRC-style. Candidates are
+    /// ordered from the most recent unread email to the oldest, and the
+    /// rotation wraps around. Drafts and Trash are ignored. Returns `None`
+    /// when there is no other mailbox to jump to.
+    fn next_unread_mailbox(&self) -> Option<usize> {
+        let mut candidates: Vec<(usize, Option<i64>)> = self
+            .mailboxes
+            .iter()
+            .zip(&self.maildirs)
+            .enumerate()
+            .filter(|(_, (mb, md))| !mb.is_drafts() && !mb.is_trash() && md.unread_count() > 0)
+            .map(|(i, (_, md))| (i, md.newest_unread_timestamp()))
+            .collect();
+        // Most recent first, `None` last, ties broken by mailbox index.
+        candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+        let next = match candidates.iter().position(|(i, _)| *i == self.current_mb) {
+            Some(pos) => candidates[(pos + 1) % candidates.len()].0,
+            None => candidates.first()?.0,
+        };
+        (next != self.current_mb).then_some(next)
     }
 
     fn move_targets(&self) -> impl Iterator<Item = (usize, &Mailbox)> {
@@ -1919,18 +1952,25 @@ mod tests {
     }
 
     #[test]
-    fn capital_j_clamped_at_last_mailbox() {
-        let mut app = make_app(vec![mb("Inbox", "/inbox")]);
+    fn capital_j_wraps_to_first_mailbox() {
+        let mut app = make_app(vec![mb("Inbox", "/inbox"), mb("Sent", "/sent")]);
         app.handle_key(key(KeyCode::Char('J')));
         app.handle_key(key(KeyCode::Char('J')));
         assert_eq!(app.current_mb, 0);
     }
 
     #[test]
-    fn capital_k_clamped_at_first_mailbox() {
+    fn capital_j_single_mailbox_stays() {
+        let mut app = make_app(vec![mb("Inbox", "/inbox")]);
+        app.handle_key(key(KeyCode::Char('J')));
+        assert_eq!(app.current_mb, 0);
+    }
+
+    #[test]
+    fn capital_k_wraps_to_last_mailbox() {
         let mut app = make_app(vec![mb("Inbox", "/inbox"), mb("Sent", "/sent")]);
         app.handle_key(key(KeyCode::Char('K')));
-        assert_eq!(app.current_mb, 0);
+        assert_eq!(app.current_mb, 1);
     }
 
     #[test]
@@ -2820,5 +2860,152 @@ mod tests {
              User5: Subj 5\n\
              +3 more"
         );
+    }
+
+    // ── next unread mailbox ───────────────────────────────────────────────────────
+
+    /// Write an unread email (in `cur/` without the `S` flag) with an
+    /// optional `Date:` header.
+    fn write_dated_unread_email(dir: &std::path::Path, id: &str, date: Option<&str>) {
+        let date = date.map(|d| format!("Date: {d}\r\n")).unwrap_or_default();
+        let content = format!(
+            "Message-ID: <{id}>\r\n\
+             From: Test <test@example.com>\r\n\
+             Subject: Test\r\n\
+             {date}\
+             \r\n\
+             Body\r\n"
+        );
+        std::fs::write(dir.join("cur").join(format!("{id}:2,")), content).unwrap();
+    }
+
+    fn cleanup(dirs: &[&std::path::Path]) {
+        for d in dirs {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    const DAY1: &str = "Mon, 01 Jan 2024 00:00:00 +0000";
+    const DAY2: &str = "Tue, 02 Jan 2024 00:00:00 +0000";
+    const DAY3: &str = "Wed, 03 Jan 2024 00:00:00 +0000";
+
+    #[test]
+    fn n_without_unread_keeps_current_mailbox() {
+        let a = make_maildir_dir();
+        let b = make_maildir_dir();
+        write_test_email(&b, "read:2,S");
+        let mut app = make_app_with_dirs(&[&a, &b]);
+        app.handle_key(key(KeyCode::Char('n')));
+        assert_eq!(app.current_mb, 0);
+        cleanup(&[&a, &b]);
+    }
+
+    #[test]
+    fn n_jumps_to_most_recent_unread_mailbox() {
+        let empty = make_maildir_dir();
+        let older = make_maildir_dir();
+        let newer = make_maildir_dir();
+        write_dated_unread_email(&older, "o", Some(DAY1));
+        write_dated_unread_email(&newer, "n", Some(DAY2));
+        let mut app = make_app_with_dirs(&[&empty, &older, &newer]);
+        app.handle_key(key(KeyCode::Char('n')));
+        assert_eq!(app.current_mb, 2);
+        cleanup(&[&empty, &older, &newer]);
+    }
+
+    #[test]
+    fn n_rotates_from_newest_to_oldest_and_wraps() {
+        let c = make_maildir_dir();
+        let a = make_maildir_dir();
+        let b = make_maildir_dir();
+        write_dated_unread_email(&c, "c", Some(DAY1));
+        write_dated_unread_email(&a, "a", Some(DAY3));
+        write_dated_unread_email(&b, "b", Some(DAY2));
+        // Mailbox order: 0 = C (oldest), 1 = A (newest), 2 = B
+        let mut app = make_app_with_dirs(&[&c, &a, &b]);
+        app.current_mb = 0;
+        let mut visited = Vec::new();
+        for _ in 0..4 {
+            app.handle_key(key(KeyCode::Char('n')));
+            visited.push(app.current_mb);
+        }
+        // C -> A -> B -> C -> A
+        assert_eq!(visited, vec![1, 2, 0, 1]);
+        cleanup(&[&c, &a, &b]);
+    }
+
+    #[test]
+    fn n_skips_drafts_and_trash() {
+        let inbox = make_maildir_dir();
+        let drafts = make_maildir_dir();
+        let trash = make_maildir_dir();
+        write_dated_unread_email(&drafts, "d", Some(DAY3));
+        write_dated_unread_email(&trash, "t", Some(DAY3));
+        let labels = ["Inbox", "Drafts", "Trash"].map(String::from);
+        let mut app = make_app_with_labeled_dirs(&labels, &[&inbox, &drafts, &trash]);
+        app.handle_key(key(KeyCode::Char('n')));
+        assert_eq!(app.current_mb, 0);
+        cleanup(&[&inbox, &drafts, &trash]);
+    }
+
+    #[test]
+    fn n_crosses_accounts() {
+        let p_inbox = make_maildir_dir();
+        let w_inbox = make_maildir_dir();
+        write_dated_unread_email(&w_inbox, "w", Some(DAY1));
+        let acct0 = make_account("personal", vec![mb("Inbox", p_inbox.to_str().unwrap())]);
+        let acct1 = make_account("work", vec![mb("Inbox", w_inbox.to_str().unwrap())]);
+        let mut app = make_multi_app(vec![acct0, acct1]);
+        app.handle_key(key(KeyCode::Char('n')));
+        assert_eq!(app.current_mb, 1);
+        assert_eq!(app.current_account_idx(), 1);
+        cleanup(&[&p_inbox, &w_inbox]);
+    }
+
+    #[test]
+    fn n_with_current_as_only_candidate_stays() {
+        let a = make_maildir_dir();
+        let b = make_maildir_dir();
+        write_dated_unread_email(&b, "b", Some(DAY1));
+        let mut app = make_app_with_dirs(&[&a, &b]);
+        app.current_mb = 1;
+        app.handle_key(key(KeyCode::Char('n')));
+        assert_eq!(app.current_mb, 1);
+        cleanup(&[&a, &b]);
+    }
+
+    #[test]
+    fn n_ties_use_mailbox_order_and_missing_dates_go_last() {
+        let start = make_maildir_dir();
+        let nodate = make_maildir_dir();
+        let tie1 = make_maildir_dir();
+        let tie2 = make_maildir_dir();
+        write_dated_unread_email(&nodate, "x", None);
+        write_dated_unread_email(&tie1, "t1", Some(DAY1));
+        write_dated_unread_email(&tie2, "t2", Some(DAY1));
+        let mut app = make_app_with_dirs(&[&start, &nodate, &tie1, &tie2]);
+        let mut visited = Vec::new();
+        for _ in 0..3 {
+            app.handle_key(key(KeyCode::Char('n')));
+            visited.push(app.current_mb);
+        }
+        assert_eq!(visited, vec![2, 3, 1]);
+        cleanup(&[&start, &nodate, &tie1, &tie2]);
+    }
+
+    #[test]
+    fn n_skips_mailbox_once_read() {
+        let a = make_maildir_dir();
+        let b = make_maildir_dir();
+        let c = make_maildir_dir();
+        write_dated_unread_email(&a, "a", Some(DAY3));
+        write_dated_unread_email(&b, "b", Some(DAY2));
+        write_dated_unread_email(&c, "c", Some(DAY1));
+        let mut app = make_app_with_dirs(&[&a, &b, &c]);
+        std::fs::rename(b.join("cur").join("b:2,"), b.join("cur").join("b:2,S")).unwrap();
+        app.maildirs[1].sync();
+        app.handle_key(key(KeyCode::Char('n')));
+        assert_eq!(app.current_mb, 2);
+        cleanup(&[&a, &b, &c]);
     }
 }
